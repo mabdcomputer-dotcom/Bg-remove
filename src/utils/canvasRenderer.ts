@@ -90,9 +90,13 @@ export function renderCompositeToCanvas(options: RenderCanvasOptions): void {
 
   const crop = calculateCropDimensions(originalWidth, originalHeight, cropPreset);
 
-  // Set canvas to the exact target crop dimensions (full resolution, lossless)
-  canvas.width = crop.width;
-  canvas.height = crop.height;
+  // Only re-dimension canvas if dimensions actually changed (avoids costly GPU context resets)
+  if (canvas.width !== crop.width) {
+    canvas.width = crop.width;
+  }
+  if (canvas.height !== crop.height) {
+    canvas.height = crop.height;
+  }
 
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';

@@ -323,14 +323,24 @@ export default function App() {
 
     setImages((prev) => [...prev, ...newItems]);
 
-    // Set first image as active if none was active
-    if (!activeImageIdRef.current || !cutoutDataUrl) {
-      setActiveImageId(newItems[0].id);
-      activeImageIdRef.current = newItems[0].id;
-    }
+    // Automatically switch active display to the newly added image (not the 1st/previous image)
+    const targetItem = newItems[0];
+    setActiveImageId(targetItem.id);
+    activeImageIdRef.current = targetItem.id;
+    setOriginalFile(targetItem.file);
+    setCutoutDataUrl(null);
+    setCutoutImgState(null);
+    cutoutImgRef.current = null;
+    setIsProcessing(true);
+    setProgressPercent(10);
+    setProgressText(lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভ হচ্ছে...' : 'Removing background...');
 
-    // Process all files sequentially in queue
+    // Process all files sequentially in queue, updating active view as each new image processes
     for (const item of newItems) {
+      setActiveImageId(item.id);
+      activeImageIdRef.current = item.id;
+      setOriginalFile(item.file);
+      setIsProcessing(true);
       await processBatchItem(item);
     }
   };
@@ -387,17 +397,58 @@ export default function App() {
     }
   };
 
-  // Remove Image from Queue
+  // Remove Image from Queue - Instant & Immediate
   const handleRemoveImage = (id: string) => {
-    setImages((prev) => {
-      const filtered = prev.filter((img) => img.id !== id);
-      if (activeImageId === id && filtered.length > 0) {
-        setTimeout(() => handleSelectImage(filtered[0].id), 0);
-      } else if (filtered.length === 0) {
-        handleResetAll();
+    // 1. Reclaim browser memory by revoking blob URL
+    const toRemove = images.find((img) => img.id === id);
+    if (toRemove?.cutoutDataUrl && toRemove.cutoutDataUrl.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(toRemove.cutoutDataUrl);
+      } catch (e) {}
+    }
+
+    const filtered = images.filter((img) => img.id !== id);
+    setImages(filtered);
+
+    if (filtered.length === 0) {
+      handleResetAll();
+      return;
+    }
+
+    // 2. If the active image was deleted, immediately switch display to the next available photo
+    if (activeImageIdRef.current === id) {
+      const nextItem = filtered[0];
+      setActiveImageId(nextItem.id);
+      activeImageIdRef.current = nextItem.id;
+
+      setOriginalFile(nextItem.file);
+      setOriginalDataUrl(nextItem.originalDataUrl);
+      setOriginalDimensions(nextItem.dimensions);
+
+      if (nextItem.originalDataUrl) {
+        const oImg = new Image();
+        oImg.src = nextItem.originalDataUrl;
+        originalImgRef.current = oImg;
+      } else {
+        originalImgRef.current = null;
       }
-      return filtered;
-    });
+
+      if (nextItem.cutoutImg && nextItem.cutoutDataUrl) {
+        cutoutImgRef.current = nextItem.cutoutImg;
+        setCutoutImgState(nextItem.cutoutImg);
+        setCutoutDataUrl(nextItem.cutoutDataUrl);
+        setUndoStack([nextItem.cutoutDataUrl]);
+        setIsProcessing(false);
+      } else {
+        cutoutImgRef.current = null;
+        setCutoutImgState(null);
+        setCutoutDataUrl(null);
+        setIsProcessing(nextItem.isProcessing);
+        setProgressPercent(nextItem.progress);
+        setProgressText(nextItem.statusText);
+      }
+      setRenderTrigger((v) => v + 1);
+    }
   };
 
   // Reset entire workspace
@@ -514,16 +565,15 @@ export default function App() {
     panY,
   ]);
 
-  // Guaranteed canvas render whenever any setting or image changes
+  // High-performance canvas render whenever any setting or image changes (Instant & smooth)
   useEffect(() => {
     if (cutoutDataUrl && (cutoutImgRef.current || cutoutImgState)) {
       renderComposite();
-      // Double trigger after DOM layout completes
-      const t1 = setTimeout(() => renderComposite(), 30);
-      const t2 = setTimeout(() => renderComposite(), 120);
+      const frameId = requestAnimationFrame(() => {
+        renderComposite();
+      });
       return () => {
-        clearTimeout(t1);
-        clearTimeout(t2);
+        cancelAnimationFrame(frameId);
       };
     }
   }, [cutoutDataUrl, cutoutImgState, renderTrigger, renderComposite]);
