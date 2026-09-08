@@ -1,13 +1,12 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, Sparkles, CheckCircle, Shield, ArrowRight, Brain, Zap, Layers, Plus } from 'lucide-react';
-import { SAMPLE_IMAGES } from '../data/presets';
+import { UploadCloud, Brain, Zap, Plus } from 'lucide-react';
 import { RemovalEngine } from '../utils/bgRemover';
 
 interface UploadZoneProps {
   lang: 'bn' | 'en';
   onFileSelect: (file: File) => void;
   onFilesSelect?: (files: File[]) => void;
-  onSampleSelect: (url: string, title: string) => void;
+  onSampleSelect?: (url: string, title: string) => void;
   isProcessing: boolean;
   progressText: string;
   progressPercent: number;
@@ -19,7 +18,6 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   lang,
   onFileSelect,
   onFilesSelect,
-  onSampleSelect,
   isProcessing,
   progressText,
   progressPercent,
@@ -69,44 +67,19 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 py-6 sm:py-8">
-      {/* Hero statement */}
+    <div className="w-full max-w-2xl mx-auto px-4 py-8">
+      {/* Clean, minimal title */}
       <div className="text-center mb-6">
-        <div className="inline-flex items-center space-x-2 px-3.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/25 text-blue-400 text-xs font-semibold mb-3">
-          <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-          <span>
-            {lang === 'bn'
-              ? 'সলিড অবজেক্ট ব্যাকগ্রাউন্ড রিমুভার ও কালার রিপ্লেসমেন্ট'
-              : 'Precision Object Cutout & Studio Color Replacer'}
-          </span>
-        </div>
-        <h2 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
-          {lang === 'bn' ? (
-            <>
-              শুধু <span className="text-emerald-400">মূল অবজেক্ট</span> রেখে ব্যাকগ্রাউন্ড সরান, <br className="hidden sm:inline" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-sky-300 to-emerald-400">
-                পাসপোর্ট নীল, সবুজ বা স্বচ্ছ পিএনজি
-              </span>{' '}
-              ডাউনলোড করুন
-            </>
-          ) : (
-            <>
-              Keep <span className="text-emerald-400">Only Main Subject</span> Solid, <br className="hidden sm:inline" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-sky-300 to-emerald-400">
-                Export Passport Blue, Studio Green or Transparent PNG
-              </span>
-            </>
-          )}
+        <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+          {lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভার' : 'AI Background Remover'}
         </h2>
-        <p className="mt-2.5 text-xs sm:text-sm text-slate-300 max-w-xl mx-auto leading-relaxed">
-          {lang === 'bn'
-            ? 'ছবি থেকে মানুষ বা অবজেক্টকে ১০০% সলিড ও অক্ষত রেখে যেকোনো জটিল ব্যাকগ্রাউন্ড স্বয়ংক্রিয়ভাবে মুছে ফেলুন। পাসপোর্ট স্কাই ব্লু, স্টুডিও গ্রিন বা স্বচ্ছ পিএনজিতে ডাউনলোড করুন।'
-            : 'Accurately isolates the main person or subject with crisp solid edges. Download as transparent PNG or with official passport blue, studio green, and white backgrounds.'}
+        <p className="text-xs sm:text-sm text-slate-400 mt-1">
+          {lang === 'bn' ? 'ছবি নির্বাচন করুন বা ড্রপ করুন' : 'Select photos or drag and drop here'}
         </p>
       </div>
 
       {/* Engine Mode Toggle */}
-      <div className="max-w-md mx-auto mb-5 p-1 rounded-xl bg-slate-900 border border-slate-800 flex items-center shadow-lg">
+      <div className="max-w-md mx-auto mb-6 p-1 rounded-xl bg-slate-900 border border-slate-800 flex items-center shadow-lg">
         <button
           type="button"
           onClick={() => setEngine('ai')}
@@ -117,7 +90,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           }`}
         >
           <Brain className="w-4 h-4 text-sky-300" />
-          <span>{lang === 'bn' ? '🧠 এআই সলিড কাটআউট (১০০% নির্ভুল)' : '🧠 AI Solid Cutout (Precise)'}</span>
+          <span>{lang === 'bn' ? '🧠 এআই সলিড কাটআউট' : '🧠 AI Solid Cutout'}</span>
         </button>
 
         <button
@@ -140,7 +113,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => !isProcessing && fileInputRef.current?.click()}
-        className={`relative group border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center transition-all cursor-pointer ${
+        className={`relative group border-2 border-dashed rounded-2xl p-8 sm:p-14 text-center transition-all cursor-pointer ${
           isDragOver
             ? 'border-blue-400 bg-blue-500/10 scale-[1.01]'
             : 'border-slate-700 hover:border-blue-500/70 bg-slate-900/70 hover:bg-slate-900/95 shadow-xl'
@@ -167,11 +140,6 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             <p className="text-base font-semibold text-white mb-1">
               {progressText || (lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভ হচ্ছে...' : 'Removing background...')}
             </p>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              {lang === 'bn'
-                ? 'শুধু মূল মানুষ বা অবজেক্টকে সলিড রেখে নিখুঁতভাবে ব্যাকগ্রাউন্ড আলাদা করা হচ্ছে...'
-                : 'Extracting solid main subject and removing background...'}
-            </p>
             {/* Progress bar */}
             <div className="w-64 h-2 bg-slate-800 rounded-full mt-4 overflow-hidden border border-slate-700">
               <div
@@ -188,10 +156,10 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             <h3 className="text-lg font-bold text-white mb-1">
               {lang === 'bn' ? 'এক বা একাধিক ছবি ড্রপ করুন বা ব্রাউজ করুন' : 'Drop one or multiple photos here'}
             </h3>
-            <p className="text-xs sm:text-sm text-slate-400 mb-4">
+            <p className="text-xs sm:text-sm text-slate-400 mb-5">
               {lang === 'bn'
-                ? 'JPG, PNG, WEBP • একসাথে একাধিক ছবি সিলেক্ট করতে পারেন (+)'
-                : 'Supports JPG, PNG, WEBP • Select multiple photos at once (+)'}
+                ? 'JPG, PNG, WEBP • একসাথে একাধিক ছবি সিলেক্ট করতে পারেন'
+                : 'Supports JPG, PNG, WEBP • Select multiple photos at once'}
             </p>
             <button
               type="button"
@@ -202,77 +170,6 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             </button>
           </div>
         )}
-      </div>
-
-      {/* Feature Badges */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6">
-        <div className="flex items-center space-x-2.5 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
-          <Layers className="w-4 h-4 text-blue-400 shrink-0" />
-          <span className="text-xs font-semibold text-slate-200">
-            {lang === 'bn' ? 'শুধু মেইন অবজেক্ট সলিড' : 'Solid Subject Cutout'}
-          </span>
-        </div>
-        <div className="flex items-center space-x-2.5 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
-          <div className="w-3.5 h-3.5 rounded-full bg-[#00a3e0] shrink-0 shadow-sm shadow-[#00a3e0]/50"></div>
-          <span className="text-xs font-semibold text-slate-200">
-            {lang === 'bn' ? 'পাসপোর্ট স্কাই ব্লু' : 'Passport Sky Blue'}
-          </span>
-        </div>
-        <div className="flex items-center space-x-2.5 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
-          <div className="w-3.5 h-3.5 rounded-full bg-[#00c853] shrink-0 shadow-sm shadow-[#00c853]/50"></div>
-          <span className="text-xs font-semibold text-slate-200">
-            {lang === 'bn' ? 'স্টুডিও গ্রিন স্ক্রিন' : 'Studio Green Screen'}
-          </span>
-        </div>
-        <div className="flex items-center space-x-2.5 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
-          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span className="text-xs font-semibold text-slate-200">
-            {lang === 'bn' ? 'এইচডি ডাউনলোড অপশন' : 'Direct HD Download'}
-          </span>
-        </div>
-      </div>
-
-      {/* Sample Photos for 1-click test */}
-      <div className="mt-8">
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="text-xs font-bold tracking-wider uppercase text-slate-400">
-            {lang === 'bn' ? 'অথবা সরাসরি ডেমো ছবি দিয়ে টেস্ট করুন' : 'Or test immediately with a sample photo'}
-          </h4>
-          <span className="text-xs text-slate-500">
-            {lang === 'bn' ? 'ক্লিক করলেই প্রসেস শুরু হবে' : 'Click any photo below'}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {SAMPLE_IMAGES.map((sample) => (
-            <button
-              key={sample.id}
-              type="button"
-              disabled={isProcessing}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSampleSelect(sample.url, sample.titleEn);
-              }}
-              className="group relative flex flex-col rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500/70 bg-slate-900 text-left transition-all hover:scale-[1.02] shadow-md disabled:opacity-50"
-            >
-              <div className="aspect-[4/5] w-full overflow-hidden bg-slate-800 relative">
-                <img
-                  src={sample.url}
-                  alt={sample.titleEn}
-                  crossOrigin="anonymous"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  loading="lazy"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent opacity-90 group-hover:opacity-75 transition-opacity"></div>
-                <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-white truncate drop-shadow-sm">
-                    {lang === 'bn' ? sample.titleBn : sample.titleEn}
-                  </span>
-                  <ArrowRight className="w-3.5 h-3.5 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   );
