@@ -1,0 +1,6 @@
+{
+  "name": "Photo Background Remover",
+  "description": "Remove image backgrounds with precision, apply professional colors (blue, green, passport tones) or studio gradients, and download in original high quality.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
