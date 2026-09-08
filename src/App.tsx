@@ -119,6 +119,7 @@ export default function App() {
     shadowBlur: 24,
     shadowOpacity: 0.35,
     hairFinishingLevel: 'crisp',
+    removalStrength: 'ultra',
     defringeEnabled: true,
   });
 
@@ -146,9 +147,11 @@ export default function App() {
   // 1. Process Batch Item
   const processBatchItem = async (
     item: BatchImageItem,
-    overrideEngine?: RemovalEngine
+    overrideEngine?: RemovalEngine,
+    overrideStrength?: 'ultra' | 'strong' | 'balanced'
   ) => {
     const activeEngine = overrideEngine || removalEngine;
+    const activeStrength = overrideStrength || adjustments.removalStrength || 'ultra';
 
     // Update item status
     setImages((prev) =>
@@ -227,7 +230,8 @@ export default function App() {
         removeSecondaryObjects,
         fillHoles,
         refineHairAndEar: true,
-        edgeFinishingLevel: adjustments.hairFinishingLevel || 'silky',
+        edgeFinishingLevel: adjustments.hairFinishingLevel || 'crisp',
+        removalStrength: activeStrength,
         originalImageSource: dataUrl,
         onProgress: (stage, pct) => {
           setImages((prev) =>
@@ -619,6 +623,25 @@ export default function App() {
     }
   };
 
+  // Re-process with Ultra-Strong AI
+  const [isReProcessing, setIsReProcessing] = useState(false);
+
+  const handleReProcessStrongAI = async (strength: 'ultra' | 'strong' | 'balanced' = 'ultra') => {
+    const activeItem = images.find((i) => i.id === activeImageId);
+    if (!activeItem) return;
+
+    setIsReProcessing(true);
+    try {
+      setAdjustments((prev) => ({
+        ...prev,
+        removalStrength: strength,
+      }));
+      await processBatchItem(activeItem, 'ai', strength);
+    } finally {
+      setIsReProcessing(false);
+    }
+  };
+
   // 4. Download Handler (with chosen background)
   const handleDownload = () => {
     if (!displayCanvasRef.current) return;
@@ -887,13 +910,13 @@ export default function App() {
                   {/* Switch Engine Re-process Button */}
                   <button
                     onClick={() => handleSwitchEngine(removalEngine === 'fast' ? 'ai' : 'fast')}
-                    disabled={isProcessing}
+                    disabled={isProcessing || isReProcessing}
                     title={
                       removalEngine === 'fast'
                         ? (lang === 'bn' ? 'এআই ডিপ নিউরাল দিয়ে রি-প্রসেস করুন' : 'Reprocess with AI Deep Neural')
                         : (lang === 'bn' ? 'সুপার ফাস্ট মোডে রি-প্রসেস করুন' : 'Reprocess with Super Fast')
                     }
-                    className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700 transition-all disabled:opacity-50"
+                    className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700 transition-all disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
                     <span>
@@ -901,6 +924,17 @@ export default function App() {
                         ? (lang === 'bn' ? 'এআই মোডে টেস্ট' : 'Try AI Mode')
                         : (lang === 'bn' ? 'ফাস্ট মোডে টেস্ট' : 'Try Fast Mode')}
                     </span>
+                  </button>
+
+                  {/* Ultra Strong AI Re-Clean Button */}
+                  <button
+                    onClick={() => handleReProcessStrongAI('ultra')}
+                    disabled={isProcessing || isReProcessing}
+                    title={lang === 'bn' ? 'আল্ট্রা স্ট্রং এআই দিয়ে সব দাগ ও ছায়া একদম ক্লিয়ার করুন' : 'Deep clean with Ultra Strong AI'}
+                    className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-500/50 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${isProcessing || isReProcessing ? 'animate-spin' : ''}`} />
+                    <span>{lang === 'bn' ? '⚡ স্ট্রং রি-রিমুভ' : '⚡ Strong Clean'}</span>
                   </button>
 
                   {/* Compare Button */}
@@ -1294,6 +1328,8 @@ export default function App() {
                     }}
                     onRefineEdges={handleRefineEdges}
                     isRefining={isRefiningEdges}
+                    onReProcessStrongAI={handleReProcessStrongAI}
+                    isReProcessing={isReProcessing}
                   />
                 )}
               </div>

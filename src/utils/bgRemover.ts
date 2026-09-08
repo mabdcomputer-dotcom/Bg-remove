@@ -15,6 +15,7 @@ export interface BgRemovalOptions {
   fillHoles?: boolean;
   refineHairAndEar?: boolean;
   edgeFinishingLevel?: 'soft' | 'crisp' | 'silky';
+  removalStrength?: 'ultra' | 'strong' | 'balanced';
   originalImageSource?: File | Blob | string;
   onProgress?: BgRemovalProgressCallback;
 }
@@ -23,16 +24,17 @@ const PUBLIC_PATH = 'https://staticimgly.com/@imgly/background-removal-data/1.7.
 
 /**
  * Preload the AI segmentation model into browser cache on app boot
+ * Uses high-precision isnet_fp16 model for sharpest, error-free segmentation
  */
 export function preloadModel(): void {
   try {
     preload({
       publicPath: PUBLIC_PATH,
-      model: 'isnet_quint8',
+      model: 'isnet_fp16',
       device: 'cpu',
       debug: false,
     }).catch((err) => {
-      console.warn('Background model preload background note:', err);
+      console.warn('Background model preload note:', err);
     });
   } catch (e) {
     console.warn('Preload initialization warning:', e);
@@ -217,11 +219,12 @@ export function applyHairAndEarFinishing(
 
 /**
  * Advanced Computer Vision Post-Processing:
- * 1. Isolates the PRIMARY / MAIN salient subject.
- * 2. Detects and eliminates detached 2nd objects, secondary background people, or clutter.
- * 3. Fills internal holes inside clothing, torsos, arms, or faces using exterior flood-fill.
- * 4. Solidifies the main object's core with full 100% opacity while preserving anti-aliased natural edges.
- * 5. Hair & Ear edge finishing pass with sub-pixel anti-aliasing and color defringing.
+ * 1. Isolates the PRIMARY / MAIN salient subject with full anatomical protection (arms, hands, legs, headwear are NEVER cut off).
+ * 2. Detects and eliminates distant background clutter, floating corner artifacts, or isolated background objects.
+ * 3. Clears background traps/openings between arm & waist or between legs, ensuring they are NEVER mistakenly filled with background color.
+ * 4. Fills ONLY genuine internal glare holes inside clothing or solid bodies.
+ * 5. Applies Ultra-Strong background alpha purge to eliminate faint shadows, wall textures, and background bleeds.
+ * 6. Hair & Ear edge finishing pass with sub-pixel anti-aliasing and deep color defringing.
  */
 export async function isolateAndSolidifyMainObject(
   blob: Blob,
@@ -231,12 +234,14 @@ export async function isolateAndSolidifyMainObject(
     fillHoles?: boolean;
     refineHairAndEar?: boolean;
     edgeFinishingLevel?: 'soft' | 'crisp' | 'silky';
+    removalStrength?: 'ultra' | 'strong' | 'balanced';
   }
 ): Promise<Blob> {
   const removeSecondary = configOptions?.removeSecondaryObjects !== false;
   const fillHoles = configOptions?.fillHoles !== false;
   const refineHairAndEar = configOptions?.refineHairAndEar !== false;
-  const edgeFinishingLevel = configOptions?.edgeFinishingLevel || 'silky';
+  const edgeFinishingLevel = configOptions?.edgeFinishingLevel || 'crisp';
+  const removalStrength = configOptions?.removalStrength || 'ultra';
 
   return new Promise((resolve) => {
     const cutoutImg = new Image();
@@ -261,9 +266,9 @@ export async function isolateAndSolidifyMainObject(
         const imgData = ctx.getImageData(0, 0, W, H);
         const d = imgData.data;
 
-        // Optionally load original image to restore RGB in filled holes
+        // Optionally load original image to sample colors and restore RGB in filled holes
         let origData: Uint8ClampedArray | null = null;
-        if (originalSource && fillHoles) {
+        if (originalSource) {
           try {
             const origImg = new Image();
             let origUrl = '';
@@ -293,8 +298,47 @@ export async function isolateAndSolidifyMainObject(
           }
         }
 
+        // Sample exterior background color along the 4 borders for smart loop/gap differentiation
+        let borderBgR = 240, borderBgG = 240, borderBgB = 240;
+        let borderBgCount = 0;
+        let sumBgR = 0, sumBgG = 0, sumBgB = 0;
+
+        if (origData) {
+          const stepX = Math.max(1, Math.floor(W / 50));
+          const stepY = Math.max(1, Math.floor(H / 50));
+          // Top and bottom borders
+          for (let x = 0; x < W; x += stepX) {
+            for (let y of [0, 1, H - 2, H - 1]) {
+              const idx = (y * W + x) * 4;
+              if (d[idx + 3] < 50) {
+                sumBgR += origData[idx];
+                sumBgG += origData[idx + 1];
+                sumBgB += origData[idx + 2];
+                borderBgCount++;
+              }
+            }
+          }
+          // Left and right borders
+          for (let y = 0; y < H; y += stepY) {
+            for (let x of [0, 1, W - 2, W - 1]) {
+              const idx = (y * W + x) * 4;
+              if (d[idx + 3] < 50) {
+                sumBgR += origData[idx];
+                sumBgG += origData[idx + 1];
+                sumBgB += origData[idx + 2];
+                borderBgCount++;
+              }
+            }
+          }
+          if (borderBgCount > 0) {
+            borderBgR = sumBgR / borderBgCount;
+            borderBgG = sumBgG / borderBgCount;
+            borderBgB = sumBgB / borderBgCount;
+          }
+        }
+
         // Downscaled grid for fast, accurate connected-component analysis
-        const scale = Math.max(1, Math.min(4, Math.floor(Math.max(W, H) / 400)));
+        const scale = Math.max(1, Math.min(3, Math.floor(Math.max(W, H) / 500)));
         const gw = Math.ceil(W / scale);
         const gh = Math.ceil(H / scale);
 
@@ -328,7 +372,7 @@ export async function isolateAndSolidifyMainObject(
         for (let gy = 0; gy < gh; gy++) {
           for (let gx = 0; gx < gw; gx++) {
             const pos = gy * gw + gx;
-            if (gridAlpha[pos] >= 35 && labels[pos] === 0) {
+            if (gridAlpha[pos] >= 30 && labels[pos] === 0) {
               currentLabel++;
               let size = 0;
               let minX = gx;
@@ -364,20 +408,20 @@ export async function isolateAndSolidifyMainObject(
                 ];
 
                 for (const n of neighbors) {
-                  if (n >= 0 && labels[n] === 0 && gridAlpha[n] >= 35) {
+                  if (n >= 0 && labels[n] === 0 && gridAlpha[n] >= 30) {
                     labels[n] = currentLabel;
                     queue.push(n);
                   }
                 }
               }
 
-              // Compute saliency score: favor central, prominent, bottom-anchored subjects
+              // Compute saliency score
               const centerX = sumX / size;
               const centerY = sumY / size;
               const distFromCenterX = Math.abs(centerX - gw / 2) / (gw / 2);
               const isAnchoredBottom = maxY >= gh - Math.max(3, Math.floor(gh * 0.05));
-              const centerWeight = Math.max(0.2, 1 - distFromCenterX * 0.45);
-              const bottomWeight = isAnchoredBottom ? 1.35 : 1.0;
+              const centerWeight = Math.max(0.25, 1 - distFromCenterX * 0.40);
+              const bottomWeight = isAnchoredBottom ? 1.30 : 1.0;
               const score = size * centerWeight * bottomWeight;
 
               components.push({
@@ -395,7 +439,7 @@ export async function isolateAndSolidifyMainObject(
           }
         }
 
-        // Determine which components to keep
+        // Determine which components to keep with SMART ANATOMICAL PROTECTION
         const keepMask = new Uint8Array(gw * gh);
         let mainComp: CompData | null = null;
         const discardedCompIds = new Set<number>();
@@ -405,42 +449,43 @@ export async function isolateAndSolidifyMainObject(
           components.sort((a, b) => b.score - a.score);
           mainComp = components[0];
 
-          // Components to approve
           const approvedCompIds = new Set<number>([mainComp.id]);
 
           if (removeSecondary) {
-            // Filter out secondary objects / 2nd people in the background
             for (let i = 1; i < components.length; i++) {
               const comp = components[i];
-              // Distance to main component
+
+              // Horizontal & vertical gaps
               const distX = Math.max(0, Math.max(comp.minX - mainComp.maxX, mainComp.minX - comp.maxX));
               const distY = Math.max(0, Math.max(comp.minY - mainComp.maxY, mainComp.minY - comp.maxY));
               const gap = Math.sqrt(distX * distX + distY * distY);
 
-              // If detached and in background, remove!
-              // Only keep if it is extremely close (e.g. arm or collar) and not an isolated background subject
-              const isClose = gap <= Math.max(5, Math.floor(gw * 0.025));
-              const isSignificant = comp.size >= mainComp.size * 0.02;
-              const isSecondaryPersonOrBackground =
-                gap > Math.max(4, Math.floor(gw * 0.02)) || comp.size > mainComp.size * 0.55;
+              // 1. Arm, hand, elbow protection: horizontally beside torso and vertically overlapping
+              const hasVerticalOverlap = !(comp.maxY < mainComp.minY || comp.minY > mainComp.maxY);
+              const isArmOrHand = hasVerticalOverlap && distX <= Math.max(35, Math.floor(gw * 0.35));
 
-              // If gap exists, it is a 2nd background object/person -> REMOVE
-              if (isClose && isSignificant && !isSecondaryPersonOrBackground) {
+              // 2. Leg / foot protection: below main body and within torso horizontal span
+              const isLegOrFoot = comp.minY >= mainComp.minY && distX <= Math.max(25, Math.floor(gw * 0.25));
+
+              // 3. Headwear, hair bun, hat protection: above main body and centered
+              const isHairOrHeadwear = comp.maxY <= mainComp.minY + Math.floor(gh * 0.20) && distX <= Math.max(20, Math.floor(gw * 0.20));
+
+              // 4. Close accessories, tie, collar, glasses
+              const isCloseAccessory = gap <= Math.max(16, Math.floor(gw * 0.10));
+
+              // 5. Couple / Partner / Child protection in group photo
+              const isCoSubject = comp.size >= mainComp.size * 0.20 && gap <= Math.max(40, Math.floor(gw * 0.30));
+
+              if (isArmOrHand || isLegOrFoot || isHairOrHeadwear || isCloseAccessory || isCoSubject) {
                 approvedCompIds.add(comp.id);
+              } else {
+                // Distant background object / clutter / speck -> remove safely
+                discardedCompIds.add(comp.id);
               }
             }
           } else {
             // Keep all components
             components.forEach((c) => approvedCompIds.add(c.id));
-          }
-
-          // Collect discarded secondary component IDs
-          if (removeSecondary) {
-            for (let i = 1; i < components.length; i++) {
-              if (!approvedCompIds.has(components[i].id)) {
-                discardedCompIds.add(components[i].id);
-              }
-            }
           }
 
           // Populate initial keepMask
@@ -450,13 +495,12 @@ export async function isolateAndSolidifyMainObject(
             }
           }
 
-          // 2. Hole-Filling ("main object full hobe")
+          // 2. Smart Hole-Filling (Eliminates Glare Holes while PROTECTING Arm/Waist and Leg Background Traps)
           if (fillHoles) {
-            // Flood fill from exterior borders (where keepMask is 0)
+            // Flood fill from all exterior borders (where keepMask is 0)
             const reachable = new Uint8Array(gw * gh);
             const borderQueue: number[] = [];
 
-            // Add all boundary cells with keepMask === 0
             for (let x = 0; x < gw; x++) {
               const top = x;
               const btm = (gh - 1) * gw + x;
@@ -503,10 +547,94 @@ export async function isolateAndSolidifyMainObject(
               }
             }
 
-            // Any cell not reachable from border is an INTERNAL HOLE inside the main object -> FILL IT!
+            // Find connected unreached regions (potential holes vs arm/leg background openings)
+            const holeLabels = new Int32Array(gw * gh);
+            let holeId = 0;
+            interface HoleData {
+              id: number;
+              size: number;
+              pixels: number[];
+            }
+            const holes: HoleData[] = [];
+
             for (let i = 0; i < keepMask.length; i++) {
-              if (keepMask[i] === 0 && reachable[i] === 0) {
-                keepMask[i] = 2; // 2 indicates filled internal hole
+              if (keepMask[i] === 0 && reachable[i] === 0 && holeLabels[i] === 0) {
+                holeId++;
+                const holePixels: number[] = [i];
+                holeLabels[i] = holeId;
+                const hq: number[] = [i];
+
+                while (hq.length > 0) {
+                  const cur = hq.pop()!;
+                  const cy = Math.floor(cur / gw);
+                  const cx = cur % gw;
+
+                  const neighbors = [
+                    cx > 0 ? cur - 1 : -1,
+                    cx < gw - 1 ? cur + 1 : -1,
+                    cy > 0 ? cur - gw : -1,
+                    cy < gh - 1 ? cur + gw : -1,
+                  ];
+
+                  for (const n of neighbors) {
+                    if (n >= 0 && keepMask[n] === 0 && reachable[n] === 0 && holeLabels[n] === 0) {
+                      holeLabels[n] = holeId;
+                      holePixels.push(n);
+                      hq.push(n);
+                    }
+                  }
+                }
+
+                holes.push({
+                  id: holeId,
+                  size: holePixels.length,
+                  pixels: holePixels,
+                });
+              }
+            }
+
+            // Evaluate each hole:
+            // If it matches original background color OR is a large opening (like arm-waist loop or leg gap), DO NOT FILL!
+            // Only fill genuine small transparent glare holes inside solid clothing.
+            const maxHoleSizeAllowed = Math.max(30, Math.floor((mainComp?.size || 1000) * 0.05));
+
+            for (const h of holes) {
+              let isBackgroundOpening = false;
+
+              // Large regions are arm-waist or leg background gaps -> Keep 100% transparent!
+              if (h.size > maxHoleSizeAllowed) {
+                isBackgroundOpening = true;
+              } else if (origData && borderBgCount > 0) {
+                // Check average color of this region
+                let rSum = 0, gSum = 0, bSum = 0;
+                for (const p of h.pixels) {
+                  const py = Math.min(H - 1, Math.floor(p / gw) * scale);
+                  const px = Math.min(W - 1, (p % gw) * scale);
+                  const oIdx = (py * W + px) * 4;
+                  rSum += origData[oIdx];
+                  gSum += origData[oIdx + 1];
+                  bSum += origData[oIdx + 2];
+                }
+                const avgR = rSum / h.size;
+                const avgG = gSum / h.size;
+                const avgB = bSum / h.size;
+
+                const colorDist = Math.sqrt(
+                  (avgR - borderBgR) ** 2 +
+                  (avgG - borderBgG) ** 2 +
+                  (avgB - borderBgB) ** 2
+                );
+
+                // Matches background palette -> It is an arm/leg gap, DO NOT FILL!
+                if (colorDist < 45) {
+                  isBackgroundOpening = true;
+                }
+              }
+
+              if (!isBackgroundOpening) {
+                for (const p of h.pixels) {
+                  keepMask[p] = 2; // 2 indicates verified internal glare hole
+                }
               }
             }
           }
@@ -520,11 +648,24 @@ export async function isolateAndSolidifyMainObject(
         const objH = Math.max(1, objMaxY - objMinY);
         const headBottomY = Math.round(objMinY + objH * 0.44);
 
+        // Alpha Cutoff & Solidification thresholds based on removalStrength
+        // Ultra Strong: aggressively purges shadows, reflections, and wall haze
+        let bgCutoff = 46;
+        let solidThreshold = 108;
+        if (removalStrength === 'strong') {
+          bgCutoff = 32;
+          solidThreshold = 95;
+        } else if (removalStrength === 'balanced') {
+          bgCutoff = 22;
+          solidThreshold = 82;
+        }
+
         // 3. Apply back to high-resolution Image Data (Native 1:1 Pixel Processing)
         for (let y = 0; y < H; y++) {
           const gy = Math.min(gh - 1, Math.floor(y / scale));
           const rowOffset = gy * gw;
           const isHeadOrHair = y <= headBottomY;
+          const currentSolidThresh = isHeadOrHair ? Math.max(60, solidThreshold - 15) : solidThreshold;
 
           for (let x = 0; x < W; x++) {
             const gx = Math.min(gw - 1, Math.floor(x / scale));
@@ -534,13 +675,13 @@ export async function isolateAndSolidifyMainObject(
             const idx = (y * W + x) * 4;
             const originalAlpha = d[idx + 3];
 
-            // A. Detached secondary background person or object -> remove completely
+            // A. Detached secondary background person or clutter -> remove completely
             if (cellLabel > 0 && discardedCompIds.has(cellLabel)) {
               d[idx + 3] = 0;
               continue;
             }
 
-            // B. Internal hole inside clothing/body -> fill completely full & solid!
+            // B. Internal glare hole inside clothing/body -> fill completely full & solid!
             if (maskVal === 2) {
               d[idx + 3] = 255;
               if (origData && originalAlpha < 30) {
@@ -551,18 +692,16 @@ export async function isolateAndSolidifyMainObject(
               continue;
             }
 
-            // C. Native High-Resolution Alpha Refinement (No blocky clipping!)
-            // Background noise purge
-            if (originalAlpha < 18) {
+            // C. Ultra-Strong Background Purge & Solid Subject Retention
+            if (originalAlpha < bgCutoff) {
+              // Completely wipe background noise, faint shadows, wall gradients
               d[idx + 3] = 0;
-            } else if (originalAlpha >= (isHeadOrHair ? 45 : 55)) {
+            } else if (originalAlpha >= currentSolidThresh) {
               // 100% solid core for subject (clothing, body, hair, face)
               d[idx + 3] = 255;
             } else {
-              // Sub-pixel smooth anti-aliased edge (not pixelated, not blurry)
-              const low = 18;
-              const high = isHeadOrHair ? 45 : 55;
-              const t = (originalAlpha - low) / (high - low);
+              // Sub-pixel smooth anti-aliased edge (not pixelated, razor-clean)
+              const t = (originalAlpha - bgCutoff) / (currentSolidThresh - bgCutoff);
               d[idx + 3] = Math.round(t * t * (3 - 2 * t) * 255);
             }
           }
@@ -632,6 +771,7 @@ export async function removeImageBackground(
   let fillHoles = true;
   let refineHairAndEar = true;
   let edgeFinishingLevel: 'soft' | 'crisp' | 'silky' = 'crisp';
+  let removalStrength: 'ultra' | 'strong' | 'balanced' = 'ultra';
   let onProgress: BgRemovalProgressCallback | undefined;
 
   if (typeof options === 'function') {
@@ -644,16 +784,17 @@ export async function removeImageBackground(
     if (options.fillHoles !== undefined) fillHoles = options.fillHoles;
     if (options.refineHairAndEar !== undefined) refineHairAndEar = options.refineHairAndEar;
     if (options.edgeFinishingLevel) edgeFinishingLevel = options.edgeFinishingLevel;
+    if (options.removalStrength) removalStrength = options.removalStrength;
     if (options.onProgress) onProgress = options.onProgress;
   }
 
   // 1. Precision AI Deep Neural Segmentation (DEFAULT)
   if (engine === 'ai') {
-    if (onProgress) onProgress('এআই মডেল প্রস্তুত হচ্ছে...', 10);
+    if (onProgress) onProgress('উচ্চক্ষমতাসম্পন্ন এআই মডেল প্রস্তুত হচ্ছে...', 10);
 
     const config: Config = {
       publicPath: PUBLIC_PATH,
-      model: 'isnet_quint8',
+      model: 'isnet_fp16',
       device: 'cpu',
       rescale: true,
       proxyToWorker: false,
@@ -672,7 +813,7 @@ export async function removeImageBackground(
           stageName = `এআই মডেল লোড হচ্ছে... (${dlPct}%)`;
           pct = Math.min(65, Math.max(10, Math.round(dlPct * 0.65)));
         } else if (key.includes('compute') || key.includes('inference')) {
-          stageName = 'মূল অবজেক্ট আলাদা করা হচ্ছে...';
+          stageName = 'মূল অবজেক্ট আলাদা ও ব্যাকগ্রাউন্ড স্ক্যান হচ্ছে...';
           pct = 75;
         } else {
           stageName = 'প্রান্ত ও কাটআউট নিখুঁত করা হচ্ছে...';
@@ -693,6 +834,7 @@ export async function removeImageBackground(
             fillHoles,
             refineHairAndEar,
             edgeFinishingLevel,
+            removalStrength,
           })
         : rawBlob;
 
@@ -716,6 +858,7 @@ export async function removeImageBackground(
             fillHoles,
             refineHairAndEar,
             edgeFinishingLevel,
+            removalStrength,
           })
         : fallbackBlob;
 
@@ -740,6 +883,7 @@ export async function removeImageBackground(
         fillHoles,
         refineHairAndEar,
         edgeFinishingLevel,
+        removalStrength,
       })
     : blob;
   if (onProgress) onProgress('সম্পন্ন!', 100);

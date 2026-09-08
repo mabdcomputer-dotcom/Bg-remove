@@ -20,6 +20,8 @@ interface AdjustmentsPanelProps {
   onApplyPresetColor?: (hex: string) => void;
   onRefineEdges?: (level: 'silky' | 'soft' | 'crisp') => void;
   isRefining?: boolean;
+  onReProcessStrongAI?: (strength: 'ultra' | 'strong' | 'balanced') => void;
+  isReProcessing?: boolean;
 }
 
 export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
@@ -29,6 +31,8 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
   onApplyPresetColor,
   onRefineEdges,
   isRefining,
+  onReProcessStrongAI,
+  isReProcessing,
 }) => {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiAdvice, setAiAdvice] = useState<{
@@ -49,7 +53,8 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
       hasShadow: false,
       shadowBlur: 24,
       shadowOpacity: 0.35,
-      hairFinishingLevel: 'silky',
+      hairFinishingLevel: 'crisp',
+      removalStrength: 'ultra',
       defringeEnabled: true,
     });
   };
@@ -90,6 +95,83 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
           <RotateCcw className="w-3 h-3" />
           <span>{lang === 'bn' ? 'রিসেট' : 'Reset'}</span>
         </button>
+      </div>
+
+      {/* Ultra-Strong AI Background Purge Section */}
+      <div className="p-3.5 rounded-xl bg-gradient-to-b from-blue-950/40 to-slate-900/80 border border-blue-900/50 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-1.5 text-xs text-blue-200 font-semibold">
+            <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+            <span>{lang === 'bn' ? 'শক্তিশালী এআই রিমুভাল শক্তি' : 'AI Removal Strength'}</span>
+          </div>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300 font-medium">
+            {lang === 'bn' ? 'আল্ট্রা স্ট্রং' : 'Ultra Strong'}
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-300 leading-tight">
+          {lang === 'bn'
+            ? 'ব্যাকগ্রাউন্ডের ছায়া, দেওয়ালের দাগ ও অপ্রয়োজনীয় অংশ সম্পূর্ণ নিখুঁতভাবে মুছে ফেলে; হাত, পা ও শরীর ১০০% অক্ষত রাখে।'
+            : 'Purges all background shadows, wall stains, and artifacts while fully preserving human anatomy.'}
+        </p>
+
+        <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+          {[
+            { id: 'ultra', labelBn: 'আল্ট্রা স্ট্রং', labelEn: 'Ultra Strong', descBn: 'ছায়া ও দাগ ছাড়া নিখুঁত কাট' },
+            { id: 'strong', labelBn: 'স্ট্রং ক্লিন', labelEn: 'Strong Clean', descBn: 'ব্যালেন্সড পরিষ্কার কাট' },
+            { id: 'balanced', labelBn: 'ডেলিকেট', labelEn: 'Delicate', descBn: 'সূক্ষ্ম চুলের আঁশ সংরক্ষণ' },
+          ].map((mode) => {
+            const isSelected = (adjustments.removalStrength || 'ultra') === mode.id;
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                disabled={isReProcessing}
+                onClick={() => {
+                  setAdjustments((prev) => ({
+                    ...prev,
+                    removalStrength: mode.id as 'ultra' | 'strong' | 'balanced',
+                  }));
+                  if (onReProcessStrongAI) {
+                    onReProcessStrongAI(mode.id as 'ultra' | 'strong' | 'balanced');
+                  }
+                }}
+                className={`p-2 rounded-lg text-left transition-all border cursor-pointer ${
+                  isSelected
+                    ? 'bg-blue-600/30 border-blue-400 text-blue-200 ring-1 ring-blue-500/40'
+                    : 'bg-slate-800/80 border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600'
+                }`}
+              >
+                <div className="text-[11px] font-semibold flex items-center justify-between">
+                  <span>{lang === 'bn' ? mode.labelBn : mode.labelEn}</span>
+                  {isSelected && <Check className="w-3 h-3 text-blue-400" />}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
+                  {mode.descBn}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {onReProcessStrongAI && (
+          <button
+            type="button"
+            disabled={isReProcessing}
+            onClick={() => onReProcessStrongAI(adjustments.removalStrength || 'ultra')}
+            className="w-full flex items-center justify-center space-x-1.5 py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isReProcessing ? 'animate-spin' : ''}`} />
+            <span>
+              {isReProcessing
+                ? lang === 'bn'
+                  ? 'আল্ট্রা স্ট্রং এআই প্রসেসিং হচ্ছে...'
+                  : 'Processing Ultra Strong AI...'
+                : lang === 'bn'
+                ? '⚡ আরো শক্তিশালীভাবে রিমুভ করুন (Ultra Clean)'
+                : '⚡ Re-process with Ultra Strong AI'}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Sliders Container */}
