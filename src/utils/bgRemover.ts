@@ -16,6 +16,8 @@ export interface BgRemovalOptions {
   refineHairAndEar?: boolean;
   edgeFinishingLevel?: 'removebg_smooth' | 'soft' | 'crisp' | 'silky';
   removalStrength?: 'ultra' | 'strong' | 'balanced';
+  edgeShift?: number;
+  purgeWhiteHalo?: boolean;
   originalImageSource?: File | Blob | string;
   onProgress?: BgRemovalProgressCallback;
 }
@@ -42,11 +44,12 @@ export function preloadModel(): void {
 }
 
 /**
- * Remove.bg-Grade Hair & Ear Smooth Matting & Color Decontamination:
- * - Natural continuous alpha matting: preserves delicate flyaway hair strands, wisps, and fine curls without harsh chopping.
+ * Remove.bg-Grade Hair & Ear Matting, White Halo Eradication & Color Decontamination:
+ * - White & Light Background Halo Eradication: Completely purges bright calendar, wall, and poster bleeding
+ *   from ear contours, hair edges, and body perimeters.
  * - Sub-pixel contour anti-aliasing: eliminates jagged, staircase pixelation around ears, neck, jawline, and shoulders.
- * - Deep Color Decontamination: strips background color bleeding (white wall glow, green curtain spill, light halos)
- *   by replacing contaminated boundary pixels with the true foreground pigment (hair/skin/fabric).
+ * - 100% Pure Foreground Color Decontamination: replaces contaminated boundary pixels with the true foreground pigment
+ *   (dark hair, warm skin, or clothing) with ZERO residual white or gray bleed.
  */
 export function applyHairAndEarFinishing(
   d: Uint8ClampedArray,
@@ -58,7 +61,9 @@ export function applyHairAndEarFinishing(
   objMaxY: number,
   headBottomY: number,
   level: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth',
-  origData?: Uint8ClampedArray | null
+  origData?: Uint8ClampedArray | null,
+  edgeShift: number = 0,
+  purgeWhiteHalo: boolean = true
 ): void {
   // Snapshot of current alphas before finishing pass
   const alphaSnapshot = new Uint8Array(W * H);
@@ -71,180 +76,294 @@ export function applyHairAndEarFinishing(
   const startX = Math.max(1, objMinX - 8);
   const endX = Math.min(W - 2, objMaxX + 8);
 
-  // Dedicated buffer for refined alpha to prevent sequential bias
+  const sourceRGB = origData || d;
+
+  // 1. Fast Distance-to-Background Transform (0 to 6 pixels outward into the subject)
+  const distToBg = new Int8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    distToBg[i] = alphaSnapshot[i] < 15 ? 0 : -1;
+  }
+
+  // Queue initial boundary background pixels (dist 0 touching subject)
+  let queue: number[] = [];
+  for (let y = 1; y < H - 1; y++) {
+    const rowOffset = y * W;
+    for (let x = 1; x < W - 1; x++) {
+      const idx = rowOffset + x;
+      if (distToBg[idx] === 0) {
+        if (
+          distToBg[idx - 1] === -1 ||
+          distToBg[idx + 1] === -1 ||
+          distToBg[idx - W] === -1 ||
+          distToBg[idx + W] === -1
+        ) {
+          queue.push(idx);
+        }
+      }
+    }
+  }
+
+  // Propagate distance field up to 6 pixels
+  const maxDist = 6;
+  for (let dist = 1; dist <= maxDist && queue.length > 0; dist++) {
+    const nextQueue: number[] = [];
+    for (let i = 0; i < queue.length; i++) {
+      const cur = queue[i];
+      const cy = Math.floor(cur / W);
+      const cx = cur % W;
+
+      if (cx > 0 && distToBg[cur - 1] === -1) {
+        distToBg[cur - 1] = dist;
+        nextQueue.push(cur - 1);
+      }
+      if (cx < W - 1 && distToBg[cur + 1] === -1) {
+        distToBg[cur + 1] = dist;
+        nextQueue.push(cur + 1);
+      }
+      if (cy > 0 && distToBg[cur - W] === -1) {
+        distToBg[cur - W] = dist;
+        nextQueue.push(cur - W);
+      }
+      if (cy < H - 1 && distToBg[cur + W] === -1) {
+        distToBg[cur + W] = dist;
+        nextQueue.push(cur + W);
+      }
+    }
+    queue = nextQueue;
+  }
+
+  // Mark all unreached interior subject pixels as deep core (dist = 7)
+  for (let i = 0; i < W * H; i++) {
+    if (distToBg[i] === -1) {
+      distToBg[i] = 7;
+    }
+  }
+
+  // 2. Background Color & Lightness Profiling
+  let sumBgR = 0;
+  let sumBgG = 0;
+  let sumBgB = 0;
+  let countBg = 0;
+  const sampleHeadEnd = Math.min(H - 1, Math.round(objMinY + (objMaxY - objMinY) * 0.65));
+  const stepY = Math.max(1, Math.floor((sampleHeadEnd - objMinY) / 50));
+
+  for (let y = Math.max(0, objMinY - 20); y <= sampleHeadEnd; y += stepY) {
+    const rowOffset = y * W;
+    for (let x = 0; x < W; x += 3) {
+      const idx = rowOffset + x;
+      if (distToBg[idx] === 0) {
+        const p4 = idx * 4;
+        sumBgR += sourceRGB[p4];
+        sumBgG += sourceRGB[p4 + 1];
+        sumBgB += sourceRGB[p4 + 2];
+        countBg++;
+      }
+    }
+  }
+
+  const globalBgR = countBg > 0 ? sumBgR / countBg : 235;
+  const globalBgG = countBg > 0 ? sumBgG / countBg : 235;
+  const globalBgB = countBg > 0 ? sumBgB / countBg : 235;
+  const globalBgL = 0.299 * globalBgR + 0.587 * globalBgG + 0.114 * globalBgB;
+  const isLightBackground = globalBgL >= 160 || (globalBgR > 180 && globalBgG > 180);
+
+  // Dedicated buffer for refined alpha
   const refinedAlpha = new Uint8Array(alphaSnapshot);
 
-  // Pass 1: Remove.bg Style Continuous Alpha Matting & Contour Anti-Aliasing
+  // 3. Boundary Defringe & White Halo Eradication Pass
+  const searchR = 5;
   for (let y = startY; y <= endY; y++) {
-    const isHeadArea = y <= headBottomY;
     const rowOffset = y * W;
 
     for (let x = startX; x <= endX; x++) {
       const curIdx = rowOffset + x;
-      const curA = alphaSnapshot[curIdx];
+      const curDist = distToBg[curIdx];
 
-      // Pure transparent background
-      if (curA === 0) continue;
-
-      // Filter distant camera sensor noise in far background
-      if (curA < 6) {
+      // Pure background or deep core
+      if (curDist <= 0) {
         refinedAlpha[curIdx] = 0;
         continue;
       }
-
-      // Check neighborhood
-      let solidNeighborCount = 0;
-      let sumNeighborA = 0;
-      let weightSum = 0;
-
-      for (let dy = -1; dy <= 1; dy++) {
-        const nRow = (y + dy) * W;
-        for (let dx = -1; dx <= 1; dx++) {
-          const nA = alphaSnapshot[nRow + (x + dx)];
-          if (nA >= 215) solidNeighborCount++;
-
-          const distSq = dx * dx + dy * dy;
-          const w = distSq === 0 ? 0.38 : distSq === 1 ? 0.11 : 0.045;
-          sumNeighborA += nA * w;
-          weightSum += w;
-        }
-      }
-
-      // Discard floating single-pixel noise far from solid subject
-      if (solidNeighborCount === 0 && curA < 45) {
-        refinedAlpha[curIdx] = 0;
+      if (curDist >= 5) {
         continue;
       }
 
-      // Solid core interior of body/face/clothes
-      if (curA >= 245) {
-        refinedAlpha[curIdx] = 255;
-        continue;
-      }
+      const curIdx4 = curIdx * 4;
+      const pR = sourceRGB[curIdx4];
+      const pG = sourceRGB[curIdx4 + 1];
+      const pB = sourceRGB[curIdx4 + 2];
+      const pL = 0.299 * pR + 0.587 * pG + 0.114 * pB;
+      const pWarmth = pR - pB;
 
-      // Boundary Transition Band (Hair strands, Ear contours, Body perimeter):
-      if (level === 'removebg_smooth') {
-        if (isHeadArea) {
-          // --- HAIR & FLYAWAY STRANDS (Remove.bg Signature Natural Matting) ---
-          // Keep continuous alpha without stepping! Fine strands (12-180) stay silky and soft
-          const normA = curA / 255;
-          // Smooth sigmoid curve with zero harsh cutoff
-          const targetA = Math.round(Math.pow(normA, 0.94) * 255);
-          refinedAlpha[curIdx] = Math.min(255, Math.max(0, targetA));
-        } else {
-          // --- EARS, JAWLINE, NECK, SHOULDERS, BODY CONTOURS ---
-          // Smooth sub-pixel anti-aliasing eliminates staircase pixelation
-          const localAvg = sumNeighborA / weightSum;
-          const smoothedA = Math.round(curA * 0.40 + localAvg * 0.60);
-          refinedAlpha[curIdx] = Math.min(255, Math.max(0, smoothedA));
-        }
-      } else if (level === 'silky') {
-        // Ultra-delicate hair wisps
-        if (isHeadArea) {
-          refinedAlpha[curIdx] = curA;
-        } else {
-          const localAvg = sumNeighborA / weightSum;
-          refinedAlpha[curIdx] = Math.round(curA * 0.50 + localAvg * 0.50);
-        }
-      } else if (level === 'soft') {
-        // Soft studio cut
-        const localAvg = sumNeighborA / weightSum;
-        refinedAlpha[curIdx] = Math.round(localAvg);
-      } else {
-        // Crisp: sharp studio edge for formal passport/ID photos
-        if (curA >= 180 || solidNeighborCount >= 5) {
-          refinedAlpha[curIdx] = 255;
-        } else if (curA < 18) {
-          refinedAlpha[curIdx] = 0;
-        } else {
-          const t = (curA - 18) / (180 - 18);
-          refinedAlpha[curIdx] = Math.round(t * t * (3 - 2 * t) * 255);
-        }
-      }
-    }
-  }
-
-  // Update RGBA buffer with refined alphas
-  for (let y = startY; y <= endY; y++) {
-    const rowOffset = y * W;
-    for (let x = startX; x <= endX; x++) {
-      const pIdx = (rowOffset + x) * 4;
-      d[pIdx + 3] = refinedAlpha[rowOffset + x];
-    }
-  }
-
-  // Pass 2: Deep Color Decontamination & Anti-Halo Spill Suppression
-  // In Remove.bg, hair strands and ear borders contain color bleed from the original background.
-  // We inspect nearby solid subject pixels to sample true hair/skin/cloth pigment and decontaminate edge RGB!
-  const searchRadius = 4; // 9x9 inspection radius
-  for (let y = startY; y <= endY; y++) {
-    const isHeadArea = y <= headBottomY;
-    const rowOffset = y * W;
-
-    for (let x = startX; x <= endX; x++) {
-      const curIdx = (rowOffset + x) * 4;
-      const finalA = d[curIdx + 3];
-
-      if (finalA === 0) continue;
-
-      // Only process perimeter pixels (semi-transparent or touching background)
-      if (finalA >= 252) {
-        let touchesEmpty = false;
-        for (let dy = -1; dy <= 1 && !touchesEmpty; dy++) {
-          const nRow = (y + dy) * W;
-          for (let dx = -1; dx <= 1; dx++) {
-            if (refinedAlpha[nRow + (x + dx)] < 240) {
-              touchesEmpty = true;
-              break;
-            }
-          }
-        }
-        if (!touchesEmpty) continue;
-      }
-
-      // Sample neighboring solid subject pixels for true foreground pigment
+      // Sample local solid foreground pigment (dist >= 3 and solid alpha)
       let solidR = 0;
       let solidG = 0;
       let solidB = 0;
-      let solidWeight = 0;
+      let solidW = 0;
 
-      for (let dy = -searchRadius; dy <= searchRadius; dy++) {
-        const nY = y + dy;
-        if (nY < 0 || nY >= H) continue;
-        const nRow = nY * W;
+      let localBgR = 0;
+      let localBgG = 0;
+      let localBgB = 0;
+      let localBgW = 0;
 
-        for (let dx = -searchRadius; dx <= searchRadius; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nX = x + dx;
-          if (nX < 0 || nX >= W) continue;
+      for (let dy = -searchR; dy <= searchR; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= H) continue;
+        const nRow = ny * W;
+        for (let dx = -searchR; dx <= searchR; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= W) continue;
+          const nIdx = nRow + nx;
+          const nDist = distToBg[nIdx];
+          const distSq = dx * dx + dy * dy;
+          const w = 1.0 / (1.0 + Math.sqrt(distSq));
 
-          const nA = alphaSnapshot[nRow + nX];
-          if (nA >= 210) {
-            const nIdx = (nRow + nX) * 4;
-            const distSq = dx * dx + dy * dy;
-            const w = 1.0 / Math.sqrt(distSq);
-            solidR += d[nIdx] * w;
-            solidG += d[nIdx + 1] * w;
-            solidB += d[nIdx + 2] * w;
-            solidWeight += w;
+          if (nDist >= 3 && alphaSnapshot[nIdx] >= 200) {
+            const p4 = nIdx * 4;
+            solidR += sourceRGB[p4] * w;
+            solidG += sourceRGB[p4 + 1] * w;
+            solidB += sourceRGB[p4 + 2] * w;
+            solidW += w;
+          } else if (nDist === 0) {
+            const p4 = nIdx * 4;
+            localBgR += sourceRGB[p4] * w;
+            localBgG += sourceRGB[p4 + 1] * w;
+            localBgB += sourceRGB[p4 + 2] * w;
+            localBgW += w;
           }
         }
       }
 
-      if (solidWeight > 0) {
-        const avgR = solidR / solidWeight;
-        const avgG = solidG / solidWeight;
-        const avgB = solidB / solidWeight;
-
-        // Color decontamination: replace the background bleed with true subject pigment
-        const alphaRatio = finalA / 255;
-        const baseDecontam = isHeadArea ? 0.90 : 0.78;
-        const blendFactor = baseDecontam * (1 - alphaRatio * 0.42);
-
-        d[curIdx] = Math.round(d[curIdx] * (1 - blendFactor) + avgR * blendFactor);
-        d[curIdx + 1] = Math.round(d[curIdx + 1] * (1 - blendFactor) + avgG * blendFactor);
-        d[curIdx + 2] = Math.round(d[curIdx + 2] * (1 - blendFactor) + avgB * blendFactor);
+      if (solidW === 0) {
+        // Disconnected speck near boundary with no solid core
+        refinedAlpha[curIdx] = 0;
+        continue;
       }
+
+      const fR = solidR / solidW;
+      const fG = solidG / solidW;
+      const fB = solidB / solidW;
+      const fL = 0.299 * fR + 0.587 * fG + 0.114 * fB;
+      const fWarmth = fR - fB;
+
+      const bgR = localBgW > 0 ? localBgR / localBgW : globalBgR;
+      const bgG = localBgW > 0 ? localBgG / localBgW : globalBgG;
+      const bgB = localBgW > 0 ? localBgB / localBgW : globalBgB;
+      const bgL = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
+
+      let isWhiteHalo = false;
+      let shouldErode = false;
+
+      // Evaluation A: Dark Hair Zone (fL <= 85)
+      if (fL <= 85) {
+        if (pL > fL + 20) {
+          isWhiteHalo = true;
+          // Residual white calendar/wall paper touching hair
+          if (pL >= 140 || pL > 0.68 * bgL) {
+            if (curDist <= 2) shouldErode = true;
+          }
+          if (pL >= 185 && curDist <= 3) {
+            shouldErode = true;
+          }
+        }
+      }
+      // Evaluation B: Ears, Face & Skin Zone (fWarmth >= 20, fR > fB, fR >= 85)
+      else if (fWarmth >= 20 && fR > fB && fR >= 85) {
+        // White calendar paper, poster edge, or light background bleed
+        const isSkinBleed =
+          pL > fL + 22 ||
+          (pL >= 180 && pWarmth < 25) ||
+          pL >= 195;
+
+        if (isSkinBleed) {
+          isWhiteHalo = true;
+          // Trim white edge border around ear
+          if (curDist <= 2) shouldErode = true;
+          // Purge white poster artifact (e.g. corner behind ear)
+          if (curDist <= 3 && pL >= 205 && pWarmth < 22) {
+            shouldErode = true;
+          }
+        }
+      }
+      // Evaluation C: General Subject Contour with Light Background
+      else if (isLightBackground && purgeWhiteHalo) {
+        if (pL > fL + 35) {
+          isWhiteHalo = true;
+          if (curDist <= 1 && (pL >= 180 || pL > bgL - 25)) {
+            shouldErode = true;
+          }
+        }
+      }
+
+      // Manual / Configured Edge Shift (tighten edge if negative)
+      if (edgeShift < 0 && curDist <= Math.abs(edgeShift)) {
+        shouldErode = true;
+      }
+
+      if (shouldErode && purgeWhiteHalo) {
+        refinedAlpha[curIdx] = 0;
+        continue;
+      }
+
+      // 100% Foreground Color Decontamination (Pure Subject Pigment)
+      d[curIdx4] = Math.round(fR);
+      d[curIdx4 + 1] = Math.round(fG);
+      d[curIdx4 + 2] = Math.round(fB);
+
+      // Alpha transition calculation
+      if (isWhiteHalo && fL <= 85) {
+        // Hair strand continuous density
+        const ratio = Math.max(0, Math.min(1, (bgL - pL) / Math.max(25, bgL - fL)));
+        const targetA = Math.round(Math.min(alphaSnapshot[curIdx], ratio * 255));
+        refinedAlpha[curIdx] = targetA < 14 ? 0 : targetA;
+      } else if (isWhiteHalo) {
+        // Soft anti-aliased ear edge
+        refinedAlpha[curIdx] = Math.min(alphaSnapshot[curIdx], curDist === 3 ? 190 : 225);
+      } else if (level === 'removebg_smooth') {
+        const normA = alphaSnapshot[curIdx] / 255;
+        refinedAlpha[curIdx] = Math.round(Math.pow(normA, 0.94) * 255);
+      }
+    }
+  }
+
+  // 4. Sub-pixel Contour Anti-Aliasing (Smooth Transition Without Stairs)
+  for (let y = startY; y <= endY; y++) {
+    const rowOffset = y * W;
+    for (let x = startX; x <= endX; x++) {
+      const idx = rowOffset + x;
+      const curA = refinedAlpha[idx];
+      const curDist = distToBg[idx];
+
+      if (curA === 0 || curDist >= 4) continue;
+
+      let sumNeighborA = 0;
+      let totalWeight = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const nRow = (y + dy) * W;
+        for (let dx = -1; dx <= 1; dx++) {
+          const nA = refinedAlpha[nRow + (x + dx)];
+          const distSq = dx * dx + dy * dy;
+          const w = distSq === 0 ? 0.40 : distSq === 1 ? 0.11 : 0.04;
+          sumNeighborA += nA * w;
+          totalWeight += w;
+        }
+      }
+
+      if (totalWeight > 0) {
+        const smoothed = Math.round(sumNeighborA / totalWeight);
+        // Only smooth boundary pixels to prevent interior blurring
+        if (curDist <= 2) {
+          refinedAlpha[idx] = Math.min(curA, Math.max(0, smoothed));
+        }
+      }
+    }
+  }
+
+  // Write refined alphas back into RGBA buffer
+  for (let y = startY; y <= endY; y++) {
+    const rowOffset = y * W;
+    for (let x = startX; x <= endX; x++) {
+      d[(rowOffset + x) * 4 + 3] = refinedAlpha[rowOffset + x];
     }
   }
 }
@@ -267,6 +386,8 @@ export async function isolateAndSolidifyMainObject(
     refineHairAndEar?: boolean;
     edgeFinishingLevel?: 'removebg_smooth' | 'soft' | 'crisp' | 'silky';
     removalStrength?: 'ultra' | 'strong' | 'balanced';
+    edgeShift?: number;
+    purgeWhiteHalo?: boolean;
   }
 ): Promise<Blob> {
   const removeSecondary = configOptions?.removeSecondaryObjects !== false;
@@ -274,6 +395,8 @@ export async function isolateAndSolidifyMainObject(
   const refineHairAndEar = configOptions?.refineHairAndEar !== false;
   const edgeFinishingLevel = configOptions?.edgeFinishingLevel || 'removebg_smooth';
   const removalStrength = configOptions?.removalStrength || 'ultra';
+  const edgeShift = configOptions?.edgeShift ?? 0;
+  const purgeWhiteHalo = configOptions?.purgeWhiteHalo !== false;
 
   return new Promise((resolve) => {
     const cutoutImg = new Image();
@@ -747,7 +870,7 @@ export async function isolateAndSolidifyMainObject(
           }
         }
 
-        // 4. Hair, Ear & Edge Finishing Pass (Sub-Pixel Anti-Aliasing & Color Defringing)
+        // 4. Hair, Ear & Edge Finishing Pass (Sub-Pixel Anti-Aliasing, White Halo Purge & Color Defringing)
         if (refineHairAndEar) {
           applyHairAndEarFinishing(
             d,
@@ -759,7 +882,9 @@ export async function isolateAndSolidifyMainObject(
             objMaxY,
             headBottomY,
             edgeFinishingLevel,
-            origData
+            origData,
+            edgeShift,
+            purgeWhiteHalo
           );
         }
 
@@ -813,6 +938,8 @@ export async function removeImageBackground(
   let refineHairAndEar = true;
   let edgeFinishingLevel: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth';
   let removalStrength: 'ultra' | 'strong' | 'balanced' = 'ultra';
+  let edgeShift = 0;
+  let purgeWhiteHalo = true;
   let onProgress: BgRemovalProgressCallback | undefined;
 
   if (typeof options === 'function') {
@@ -826,6 +953,8 @@ export async function removeImageBackground(
     if (options.refineHairAndEar !== undefined) refineHairAndEar = options.refineHairAndEar;
     if (options.edgeFinishingLevel) edgeFinishingLevel = options.edgeFinishingLevel;
     if (options.removalStrength) removalStrength = options.removalStrength;
+    if (options.edgeShift !== undefined) edgeShift = options.edgeShift;
+    if (options.purgeWhiteHalo !== undefined) purgeWhiteHalo = options.purgeWhiteHalo;
     if (options.onProgress) onProgress = options.onProgress;
   }
 
@@ -876,6 +1005,8 @@ export async function removeImageBackground(
             refineHairAndEar,
             edgeFinishingLevel,
             removalStrength,
+            edgeShift,
+            purgeWhiteHalo,
           })
         : rawBlob;
 
@@ -900,6 +1031,8 @@ export async function removeImageBackground(
             refineHairAndEar,
             edgeFinishingLevel,
             removalStrength,
+            edgeShift,
+            purgeWhiteHalo,
           })
         : fallbackBlob;
 
@@ -925,6 +1058,8 @@ export async function removeImageBackground(
         refineHairAndEar,
         edgeFinishingLevel,
         removalStrength,
+        edgeShift,
+        purgeWhiteHalo,
       })
     : blob;
   if (onProgress) onProgress('সম্পন্ন!', 100);
@@ -936,9 +1071,36 @@ export async function removeImageBackground(
  */
 export async function refineCutoutEdges(
   cutoutSource: Blob | string,
-  level: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth'
+  level: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth',
+  edgeShift: number = 0,
+  purgeWhiteHalo: boolean = true,
+  originalSource?: Blob | string | null
 ): Promise<Blob> {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
+    let origData: Uint8ClampedArray | null = null;
+    if (originalSource) {
+      try {
+        const origImg = new Image();
+        const origUrl = typeof originalSource === 'string' ? originalSource : URL.createObjectURL(originalSource);
+        await new Promise<void>((r) => {
+          origImg.onload = () => r();
+          origImg.onerror = () => r();
+          origImg.src = origUrl;
+        });
+        const oCanvas = document.createElement('canvas');
+        oCanvas.width = origImg.naturalWidth || origImg.width;
+        oCanvas.height = origImg.naturalHeight || origImg.height;
+        const oCtx = oCanvas.getContext('2d', { willReadFrequently: true });
+        if (oCtx && oCanvas.width > 0 && oCanvas.height > 0) {
+          oCtx.drawImage(origImg, 0, 0);
+          origData = oCtx.getImageData(0, 0, oCanvas.width, oCanvas.height).data;
+        }
+        if (typeof originalSource !== 'string') URL.revokeObjectURL(origUrl);
+      } catch (e) {
+        // non-fatal
+      }
+    }
+
     const img = new Image();
     const url = typeof cutoutSource === 'string' ? cutoutSource : URL.createObjectURL(cutoutSource);
 
@@ -977,7 +1139,20 @@ export async function refineCutoutEdges(
 
       if (minX < maxX && minY < maxY) {
         const headBottomY = Math.round(minY + (maxY - minY) * 0.44);
-        applyHairAndEarFinishing(d, W, H, minX, maxX, minY, maxY, headBottomY, level);
+        applyHairAndEarFinishing(
+          d,
+          W,
+          H,
+          minX,
+          maxX,
+          minY,
+          maxY,
+          headBottomY,
+          level,
+          origData,
+          edgeShift,
+          purgeWhiteHalo
+        );
         ctx.putImageData(imgData, 0, 0);
       }
 

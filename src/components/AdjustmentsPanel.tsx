@@ -17,8 +17,11 @@ interface AdjustmentsPanelProps {
   lang: 'bn' | 'en';
   adjustments: SubjectAdjustments;
   setAdjustments: React.Dispatch<React.SetStateAction<SubjectAdjustments>>;
-  onApplyPresetColor?: (hex: string) => void;
-  onRefineEdges?: (level: 'removebg_smooth' | 'silky' | 'soft' | 'crisp') => void;
+  onRefineEdges?: (
+    level: 'removebg_smooth' | 'silky' | 'soft' | 'crisp',
+    edgeShift?: number,
+    purgeWhiteHalo?: boolean
+  ) => void;
   isRefining?: boolean;
   onReProcessStrongAI?: (strength: 'ultra' | 'strong' | 'balanced') => void;
   isReProcessing?: boolean;
@@ -350,6 +353,87 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
                   : lang === 'bn'
                   ? '✨ remove.bg স্টাইলে স্মুথ ফিনিশিং দিন'
                   : '✨ Apply Remove.bg Smooth Matting'}
+              </span>
+            </button>
+          )}
+        </div>
+
+        {/* White Halo & Ear Defringe Eradication Section */}
+        <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-1.5 text-xs text-amber-300 font-semibold">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>{lang === 'bn' ? 'সাদা দাগ ও কানের হ্যালো ক্লিন' : 'White Halo & Ear Defringe'}</span>
+            </div>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-medium">
+              {lang === 'bn' ? 'অ্যান্টি-হোয়াইট বর্ডার' : 'Anti-White Bleed'}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-300 leading-tight">
+            {lang === 'bn'
+              ? 'ক্যালেন্ডার বা দেওয়ালের সাদা ব্যাকগ্রাউন্ডের কারণে কান ও চুলের পাশে যে সাদা দাগ তৈরি হয়, তা সম্পূর্ণ মুছে ফেলে।'
+              : 'Eradicates bright calendar, wall, and paper halos from ear curves and hair contours.'}
+          </p>
+
+          {/* Edge Trim / Defringe Slider */}
+          <div>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-slate-300">
+                {lang === 'bn' ? 'এজ ট্রিম ও ডিফ্রিঞ্জ (Edge Trim)' : 'Edge Shift & Defringe'}
+              </span>
+              <span className="font-mono text-slate-400 text-[11px]">
+                {adjustments.edgeShift ?? 0}px
+              </span>
+            </div>
+            <input
+              type="range"
+              min={-3}
+              max={2}
+              step={1}
+              value={adjustments.edgeShift ?? 0}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setAdjustments((prev) => ({ ...prev, edgeShift: val }));
+                if (onRefineEdges) {
+                  onRefineEdges(
+                    adjustments.hairFinishingLevel || 'removebg_smooth',
+                    val,
+                    adjustments.defringeEnabled !== false
+                  );
+                }
+              }}
+              className="w-full accent-amber-500"
+            />
+            <div className="flex justify-between text-[9px] text-slate-500 mt-0.5">
+              <span>{lang === 'bn' ? '-3px (খুব টাইট)' : '-3px (Tight)'}</span>
+              <span>{lang === 'bn' ? '0px (স্বাভাবিক)' : '0px (Normal)'}</span>
+              <span>{lang === 'bn' ? '+2px (প্রশস্ত)' : '+2px (Wide)'}</span>
+            </div>
+          </div>
+
+          {/* Purge White Halo Button */}
+          {onRefineEdges && (
+            <button
+              type="button"
+              disabled={isRefining}
+              onClick={() =>
+                onRefineEdges(
+                  adjustments.hairFinishingLevel || 'removebg_smooth',
+                  adjustments.edgeShift ?? 0,
+                  true
+                )
+              }
+              className="w-full flex items-center justify-center space-x-1.5 py-1.5 px-3 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefining ? 'animate-spin' : ''}`} />
+              <span>
+                {isRefining
+                  ? lang === 'bn'
+                    ? 'সাদা দাগ দূর করা হচ্ছে...'
+                    : 'Purging white borders...'
+                  : lang === 'bn'
+                  ? '⚡ কান ও চুলের সাদা বর্ডার মুছে ফেলুন (Purge White Halo)'
+                  : '⚡ Purge White Borders & Halos'}
               </span>
             </button>
           )}

@@ -234,6 +234,8 @@ export default function App() {
         refineHairAndEar: true,
         edgeFinishingLevel: activeFinishing,
         removalStrength: activeStrength,
+        edgeShift: adjustments.edgeShift || 0,
+        purgeWhiteHalo: adjustments.defringeEnabled !== false,
         originalImageSource: dataUrl,
         onProgress: (stage, pct) => {
           setImages((prev) =>
@@ -588,18 +590,30 @@ export default function App() {
   const [isRefiningEdges, setIsRefiningEdges] = useState(false);
 
   const handleRefineEdges = async (
-    level: 'removebg_smooth' | 'silky' | 'soft' | 'crisp' = 'removebg_smooth'
+    level: 'removebg_smooth' | 'silky' | 'soft' | 'crisp' = 'removebg_smooth',
+    overrideShift?: number,
+    overridePurgeHalo?: boolean
   ) => {
     const activeItem = images.find((i) => i.id === activeImageId);
     if (!activeItem || !activeItem.cutoutBlob) return;
 
     try {
       setIsRefiningEdges(true);
+      const shift = overrideShift !== undefined ? overrideShift : (adjustments.edgeShift || 0);
+      const purge = overridePurgeHalo !== undefined ? overridePurgeHalo : (adjustments.defringeEnabled !== false);
       setAdjustments((prev) => ({
         ...prev,
         hairFinishingLevel: level,
+        edgeShift: shift,
+        defringeEnabled: purge,
       }));
-      const refinedBlob = await refineCutoutEdges(activeItem.cutoutBlob, level);
+      const refinedBlob = await refineCutoutEdges(
+        activeItem.cutoutBlob,
+        level,
+        shift,
+        purge,
+        activeItem.originalDataUrl || originalDataUrl
+      );
       const newCutoutUrl = URL.createObjectURL(refinedBlob);
       const newImg = new Image();
       await new Promise<void>((resolve, reject) => {
