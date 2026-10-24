@@ -14,7 +14,7 @@ export interface BgRemovalOptions {
   removeSecondaryObjects?: boolean;
   fillHoles?: boolean;
   refineHairAndEar?: boolean;
-  edgeFinishingLevel?: 'soft' | 'crisp' | 'silky';
+  edgeFinishingLevel?: 'removebg_smooth' | 'soft' | 'crisp' | 'silky';
   removalStrength?: 'ultra' | 'strong' | 'balanced';
   originalImageSource?: File | Blob | string;
   onProgress?: BgRemovalProgressCallback;
@@ -42,11 +42,11 @@ export function preloadModel(): void {
 }
 
 /**
- * Professional Edge Finishing & Defringing Pass:
- * - Eliminates jagged, staircase, pixelated contours around ears, jawline, and shoulders via sub-pixel anti-aliasing.
- * - Restores organic hair wisps and delicate strands with smooth alpha transitions.
- * - Eradicates background color bleeding (green spill, bright glare, halos) by extending nearby solid subject
- *   color (hair/skin) into semi-transparent border pixels.
+ * Remove.bg-Grade Hair & Ear Smooth Matting & Color Decontamination:
+ * - Natural continuous alpha matting: preserves delicate flyaway hair strands, wisps, and fine curls without harsh chopping.
+ * - Sub-pixel contour anti-aliasing: eliminates jagged, staircase pixelation around ears, neck, jawline, and shoulders.
+ * - Deep Color Decontamination: strips background color bleeding (white wall glow, green curtain spill, light halos)
+ *   by replacing contaminated boundary pixels with the true foreground pigment (hair/skin/fabric).
  */
 export function applyHairAndEarFinishing(
   d: Uint8ClampedArray,
@@ -57,7 +57,8 @@ export function applyHairAndEarFinishing(
   objMinY: number,
   objMaxY: number,
   headBottomY: number,
-  level: 'soft' | 'crisp' | 'silky' = 'crisp'
+  level: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth',
+  origData?: Uint8ClampedArray | null
 ): void {
   // Snapshot of current alphas before finishing pass
   const alphaSnapshot = new Uint8Array(W * H);
@@ -65,85 +66,117 @@ export function applyHairAndEarFinishing(
     alphaSnapshot[i] = d[i * 4 + 3];
   }
 
-  const startY = Math.max(1, objMinY - 6);
-  const endY = Math.min(H - 2, objMaxY + 6);
-  const startX = Math.max(1, objMinX - 6);
-  const endX = Math.min(W - 2, objMaxX + 6);
+  const startY = Math.max(1, objMinY - 8);
+  const endY = Math.min(H - 2, objMaxY + 8);
+  const startX = Math.max(1, objMinX - 8);
+  const endX = Math.min(W - 2, objMaxX + 8);
 
-  // Pass 1: Edge boundary alpha refinement and background noise eradication
+  // Dedicated buffer for refined alpha to prevent sequential bias
+  const refinedAlpha = new Uint8Array(alphaSnapshot);
+
+  // Pass 1: Remove.bg Style Continuous Alpha Matting & Contour Anti-Aliasing
   for (let y = startY; y <= endY; y++) {
     const isHeadArea = y <= headBottomY;
     const rowOffset = y * W;
 
     for (let x = startX; x <= endX; x++) {
-      const curIdx = (rowOffset + x) * 4;
-      const curA = alphaSnapshot[rowOffset + x];
+      const curIdx = rowOffset + x;
+      const curA = alphaSnapshot[curIdx];
 
-      // Clean background speckles
+      // Pure transparent background
       if (curA === 0) continue;
 
-      if (curA < 18) {
-        d[curIdx + 3] = 0;
+      // Filter distant camera sensor noise in far background
+      if (curA < 6) {
+        refinedAlpha[curIdx] = 0;
         continue;
       }
 
       // Check neighborhood
       let solidNeighborCount = 0;
-      let hasZeroNeighbor = false;
+      let sumNeighborA = 0;
+      let weightSum = 0;
 
       for (let dy = -1; dy <= 1; dy++) {
         const nRow = (y + dy) * W;
         for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
           const nA = alphaSnapshot[nRow + (x + dx)];
-          if (nA >= 210) solidNeighborCount++;
-          if (nA === 0) hasZeroNeighbor = true;
+          if (nA >= 215) solidNeighborCount++;
+
+          const distSq = dx * dx + dy * dy;
+          const w = distSq === 0 ? 0.38 : distSq === 1 ? 0.11 : 0.045;
+          sumNeighborA += nA * w;
+          weightSum += w;
         }
       }
 
-      // Purge floating isolated noise in background
-      if (solidNeighborCount === 0 && curA < 120) {
-        d[curIdx + 3] = 0;
+      // Discard floating single-pixel noise far from solid subject
+      if (solidNeighborCount === 0 && curA < 45) {
+        refinedAlpha[curIdx] = 0;
         continue;
       }
 
-      // Ultra-Clear Crisp Edge Tuning ("ekdm clear"):
-      if (curA < 255) {
-        if (level === 'crisp') {
-          // If pixel has strong subject presence or is surrounded by solid pixels -> 100% solid
-          if (curA >= 45 || solidNeighborCount >= 3) {
-            d[curIdx + 3] = 255;
-          } else if (curA < 20) {
-            d[curIdx + 3] = 0;
-          } else {
-            // Tight, razor-sharp 1-pixel anti-aliasing curve
-            const t = (curA - 20) / (45 - 20);
-            d[curIdx + 3] = Math.round(t * t * (3 - 2 * t) * 255);
-          }
-        } else if (level === 'soft') {
-          if (curA >= 70 || solidNeighborCount >= 4) {
-            d[curIdx + 3] = 255;
-          } else if (curA < 18) {
-            d[curIdx + 3] = 0;
-          } else {
-            const t = (curA - 18) / (70 - 18);
-            d[curIdx + 3] = Math.round(t * t * (3 - 2 * t) * 255);
-          }
+      // Solid core interior of body/face/clothes
+      if (curA >= 245) {
+        refinedAlpha[curIdx] = 255;
+        continue;
+      }
+
+      // Boundary Transition Band (Hair strands, Ear contours, Body perimeter):
+      if (level === 'removebg_smooth') {
+        if (isHeadArea) {
+          // --- HAIR & FLYAWAY STRANDS (Remove.bg Signature Natural Matting) ---
+          // Keep continuous alpha without stepping! Fine strands (12-180) stay silky and soft
+          const normA = curA / 255;
+          // Smooth sigmoid curve with zero harsh cutoff
+          const targetA = Math.round(Math.pow(normA, 0.94) * 255);
+          refinedAlpha[curIdx] = Math.min(255, Math.max(0, targetA));
         } else {
-          // Silky: fine delicate hair wisps
-          if (curA >= 90 || solidNeighborCount >= 5) {
-            d[curIdx + 3] = 255;
-          } else if (curA < 15) {
-            d[curIdx + 3] = 0;
-          }
+          // --- EARS, JAWLINE, NECK, SHOULDERS, BODY CONTOURS ---
+          // Smooth sub-pixel anti-aliasing eliminates staircase pixelation
+          const localAvg = sumNeighborA / weightSum;
+          const smoothedA = Math.round(curA * 0.40 + localAvg * 0.60);
+          refinedAlpha[curIdx] = Math.min(255, Math.max(0, smoothedA));
+        }
+      } else if (level === 'silky') {
+        // Ultra-delicate hair wisps
+        if (isHeadArea) {
+          refinedAlpha[curIdx] = curA;
+        } else {
+          const localAvg = sumNeighborA / weightSum;
+          refinedAlpha[curIdx] = Math.round(curA * 0.50 + localAvg * 0.50);
+        }
+      } else if (level === 'soft') {
+        // Soft studio cut
+        const localAvg = sumNeighborA / weightSum;
+        refinedAlpha[curIdx] = Math.round(localAvg);
+      } else {
+        // Crisp: sharp studio edge for formal passport/ID photos
+        if (curA >= 180 || solidNeighborCount >= 5) {
+          refinedAlpha[curIdx] = 255;
+        } else if (curA < 18) {
+          refinedAlpha[curIdx] = 0;
+        } else {
+          const t = (curA - 18) / (180 - 18);
+          refinedAlpha[curIdx] = Math.round(t * t * (3 - 2 * t) * 255);
         }
       }
     }
   }
 
-  // Pass 2: Deep Color Defringing & Halo Decontamination
-  // Replaces leftover background halo (green, white glare, shadows) with true subject colors
-  const searchRadius = 2; // 5x5 inspection window
+  // Update RGBA buffer with refined alphas
+  for (let y = startY; y <= endY; y++) {
+    const rowOffset = y * W;
+    for (let x = startX; x <= endX; x++) {
+      const pIdx = (rowOffset + x) * 4;
+      d[pIdx + 3] = refinedAlpha[rowOffset + x];
+    }
+  }
+
+  // Pass 2: Deep Color Decontamination & Anti-Halo Spill Suppression
+  // In Remove.bg, hair strands and ear borders contain color bleed from the original background.
+  // We inspect nearby solid subject pixels to sample true hair/skin/cloth pigment and decontaminate edge RGB!
+  const searchRadius = 4; // 9x9 inspection radius
   for (let y = startY; y <= endY; y++) {
     const isHeadArea = y <= headBottomY;
     const rowOffset = y * W;
@@ -154,17 +187,13 @@ export function applyHairAndEarFinishing(
 
       if (finalA === 0) continue;
 
-      // Check if this pixel is on the perimeter edge (either semi-transparent or touches transparency)
-      const origA = alphaSnapshot[rowOffset + x];
-      const isPerimeter = origA < 254;
-
-      if (!isPerimeter) {
-        // Quick boundary check for fully opaque pixels right next to background
+      // Only process perimeter pixels (semi-transparent or touching background)
+      if (finalA >= 252) {
         let touchesEmpty = false;
         for (let dy = -1; dy <= 1 && !touchesEmpty; dy++) {
           const nRow = (y + dy) * W;
           for (let dx = -1; dx <= 1; dx++) {
-            if (alphaSnapshot[nRow + (x + dx)] === 0) {
+            if (refinedAlpha[nRow + (x + dx)] < 240) {
               touchesEmpty = true;
               break;
             }
@@ -173,7 +202,7 @@ export function applyHairAndEarFinishing(
         if (!touchesEmpty) continue;
       }
 
-      // Sample neighboring solid subject pixels for true pigment (hair, skin, cloth)
+      // Sample neighboring solid subject pixels for true foreground pigment
       let solidR = 0;
       let solidG = 0;
       let solidB = 0;
@@ -190,7 +219,7 @@ export function applyHairAndEarFinishing(
           if (nX < 0 || nX >= W) continue;
 
           const nA = alphaSnapshot[nRow + nX];
-          if (nA >= 215) {
+          if (nA >= 210) {
             const nIdx = (nRow + nX) * 4;
             const distSq = dx * dx + dy * dy;
             const w = 1.0 / Math.sqrt(distSq);
@@ -207,11 +236,14 @@ export function applyHairAndEarFinishing(
         const avgG = solidG / solidWeight;
         const avgB = solidB / solidWeight;
 
-        // Defringe strength: hair & ears get maximum defringe to completely eliminate background halos
-        const defringeStrength = isHeadArea ? 0.85 : 0.65;
-        d[curIdx] = Math.round(d[curIdx] * (1 - defringeStrength) + avgR * defringeStrength);
-        d[curIdx + 1] = Math.round(d[curIdx + 1] * (1 - defringeStrength) + avgG * defringeStrength);
-        d[curIdx + 2] = Math.round(d[curIdx + 2] * (1 - defringeStrength) + avgB * defringeStrength);
+        // Color decontamination: replace the background bleed with true subject pigment
+        const alphaRatio = finalA / 255;
+        const baseDecontam = isHeadArea ? 0.90 : 0.78;
+        const blendFactor = baseDecontam * (1 - alphaRatio * 0.42);
+
+        d[curIdx] = Math.round(d[curIdx] * (1 - blendFactor) + avgR * blendFactor);
+        d[curIdx + 1] = Math.round(d[curIdx + 1] * (1 - blendFactor) + avgG * blendFactor);
+        d[curIdx + 2] = Math.round(d[curIdx + 2] * (1 - blendFactor) + avgB * blendFactor);
       }
     }
   }
@@ -233,14 +265,14 @@ export async function isolateAndSolidifyMainObject(
     removeSecondaryObjects?: boolean;
     fillHoles?: boolean;
     refineHairAndEar?: boolean;
-    edgeFinishingLevel?: 'soft' | 'crisp' | 'silky';
+    edgeFinishingLevel?: 'removebg_smooth' | 'soft' | 'crisp' | 'silky';
     removalStrength?: 'ultra' | 'strong' | 'balanced';
   }
 ): Promise<Blob> {
   const removeSecondary = configOptions?.removeSecondaryObjects !== false;
   const fillHoles = configOptions?.fillHoles !== false;
   const refineHairAndEar = configOptions?.refineHairAndEar !== false;
-  const edgeFinishingLevel = configOptions?.edgeFinishingLevel || 'crisp';
+  const edgeFinishingLevel = configOptions?.edgeFinishingLevel || 'removebg_smooth';
   const removalStrength = configOptions?.removalStrength || 'ultra';
 
   return new Promise((resolve) => {
@@ -648,16 +680,20 @@ export async function isolateAndSolidifyMainObject(
         const objH = Math.max(1, objMaxY - objMinY);
         const headBottomY = Math.round(objMinY + objH * 0.44);
 
-        // Alpha Cutoff & Solidification thresholds based on removalStrength
-        // Ultra Strong: aggressively purges shadows, reflections, and wall haze
-        let bgCutoff = 46;
-        let solidThreshold = 108;
-        if (removalStrength === 'strong') {
-          bgCutoff = 32;
-          solidThreshold = 95;
+        // Alpha Cutoff & Solidification thresholds based on removalStrength and finishing level
+        // Remove.bg style preserves continuous alpha for fine hair strands and smooth contours
+        const isSmoothMatte = edgeFinishingLevel === 'removebg_smooth' || edgeFinishingLevel === 'silky';
+        
+        let bgCutoff = isSmoothMatte ? 8 : 18;
+        let solidThreshold = isSmoothMatte ? 240 : 210;
+
+        if (removalStrength === 'ultra') {
+          // In ultra strength, discard distant faint noise without clipping hair strands
+          bgCutoff = isSmoothMatte ? 10 : 24;
+        } else if (removalStrength === 'strong') {
+          bgCutoff = isSmoothMatte ? 8 : 18;
         } else if (removalStrength === 'balanced') {
-          bgCutoff = 22;
-          solidThreshold = 82;
+          bgCutoff = isSmoothMatte ? 6 : 14;
         }
 
         // 3. Apply back to high-resolution Image Data (Native 1:1 Pixel Processing)
@@ -665,7 +701,6 @@ export async function isolateAndSolidifyMainObject(
           const gy = Math.min(gh - 1, Math.floor(y / scale));
           const rowOffset = gy * gw;
           const isHeadOrHair = y <= headBottomY;
-          const currentSolidThresh = isHeadOrHair ? Math.max(60, solidThreshold - 15) : solidThreshold;
 
           for (let x = 0; x < W; x++) {
             const gx = Math.min(gw - 1, Math.floor(x / scale));
@@ -692,17 +727,22 @@ export async function isolateAndSolidifyMainObject(
               continue;
             }
 
-            // C. Ultra-Strong Background Purge & Solid Subject Retention
+            // C. Smooth Matting & Solid Core Retention (Remove.bg Style)
             if (originalAlpha < bgCutoff) {
-              // Completely wipe background noise, faint shadows, wall gradients
+              // Wipe distant background noise & faint shadows
               d[idx + 3] = 0;
-            } else if (originalAlpha >= currentSolidThresh) {
-              // 100% solid core for subject (clothing, body, hair, face)
+            } else if (originalAlpha >= solidThreshold) {
+              // 100% solid core for subject body, clothing, face
               d[idx + 3] = 255;
             } else {
-              // Sub-pixel smooth anti-aliased edge (not pixelated, razor-clean)
-              const t = (originalAlpha - bgCutoff) / (currentSolidThresh - bgCutoff);
-              d[idx + 3] = Math.round(t * t * (3 - 2 * t) * 255);
+              // Continuous smooth transition for hair strands, ear curves, and body contour
+              if (isSmoothMatte) {
+                const norm = (originalAlpha - bgCutoff) / (solidThreshold - bgCutoff);
+                d[idx + 3] = Math.round(Math.pow(norm, isHeadOrHair ? 0.94 : 1.0) * 255);
+              } else {
+                const t = (originalAlpha - bgCutoff) / (solidThreshold - bgCutoff);
+                d[idx + 3] = Math.round(t * t * (3 - 2 * t) * 255);
+              }
             }
           }
         }
@@ -718,7 +758,8 @@ export async function isolateAndSolidifyMainObject(
             objMinY,
             objMaxY,
             headBottomY,
-            edgeFinishingLevel
+            edgeFinishingLevel,
+            origData
           );
         }
 
@@ -770,7 +811,7 @@ export async function removeImageBackground(
   let removeSecondaryObjects = true;
   let fillHoles = true;
   let refineHairAndEar = true;
-  let edgeFinishingLevel: 'soft' | 'crisp' | 'silky' = 'crisp';
+  let edgeFinishingLevel: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth';
   let removalStrength: 'ultra' | 'strong' | 'balanced' = 'ultra';
   let onProgress: BgRemovalProgressCallback | undefined;
 
@@ -895,7 +936,7 @@ export async function removeImageBackground(
  */
 export async function refineCutoutEdges(
   cutoutSource: Blob | string,
-  level: 'soft' | 'crisp' | 'silky' = 'silky'
+  level: 'removebg_smooth' | 'soft' | 'crisp' | 'silky' = 'removebg_smooth'
 ): Promise<Blob> {
   return new Promise((resolve) => {
     const img = new Image();

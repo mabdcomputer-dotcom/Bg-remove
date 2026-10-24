@@ -18,7 +18,7 @@ interface AdjustmentsPanelProps {
   adjustments: SubjectAdjustments;
   setAdjustments: React.Dispatch<React.SetStateAction<SubjectAdjustments>>;
   onApplyPresetColor?: (hex: string) => void;
-  onRefineEdges?: (level: 'silky' | 'soft' | 'crisp') => void;
+  onRefineEdges?: (level: 'removebg_smooth' | 'silky' | 'soft' | 'crisp') => void;
   isRefining?: boolean;
   onReProcessStrongAI?: (strength: 'ultra' | 'strong' | 'balanced') => void;
   isReProcessing?: boolean;
@@ -53,7 +53,7 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
       hasShadow: false,
       shadowBlur: 24,
       shadowOpacity: 0.35,
-      hairFinishingLevel: 'crisp',
+      hairFinishingLevel: 'removebg_smooth',
       removalStrength: 'ultra',
       defringeEnabled: true,
     });
@@ -248,30 +248,55 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
           />
         </div>
 
-        {/* Hair & Ear Edge Finishing (চুল ও কানের এজ ফিনিশিং) */}
+        {/* Hair & Ear Edge Finishing (চুল ও কানের এজ ফিনিশিং - remove.bg সিস্টেম) */}
         <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-1.5 text-xs text-slate-200 font-semibold">
+            <div className="flex items-center space-x-1.5 text-xs text-emerald-300 font-semibold">
               <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{lang === 'bn' ? 'চুল ও কানের নিখুঁত ফিনিশিং' : 'Hair & Ear Edge Finishing'}</span>
+              <span>{lang === 'bn' ? 'remove.bg স্মুথ হেয়ার ও বডি কাট' : 'Remove.bg Smooth Matting'}</span>
             </div>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-medium">
-              {lang === 'bn' ? 'স্বয়ংক্রিয় সক্রিয়' : 'Active'}
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-medium">
+              {lang === 'bn' ? 'স্মুথ ও অ্যান্টি-হ্যালো' : 'Smooth & Anti-Halo'}
             </span>
           </div>
-          <p className="text-[11px] text-slate-400 leading-tight">
+          <p className="text-[11px] text-slate-300 leading-tight">
             {lang === 'bn'
-              ? 'চুলের সূক্ষ্ম আঁশ ও কানের কিনারা মসৃণ করে ব্যাকগ্রাউন্ডের কালার স্পিল মুছে দেয়।'
-              : 'Smoothes hair wisps and ear contours while removing background color bleed.'}
+              ? 'মাথার চুল, কানের চারপাশ ও শরীরের কিনারা remove.bg-এর মতো নিখুঁত ও মসৃণভাবে কেটে ফেলে; কোনো খাঁজকাটা বা সাদা দাগ থাকে না।'
+              : 'Smooths hair wisps, ears, and body contours just like remove.bg without jagged stairs or background halos.'}
           </p>
 
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
             {[
-              { id: 'crisp', labelBn: 'একদম ক্লিয়ার', labelEn: 'Ultra Clear', descBn: 'দাগ ও ব্লার ছাড়া ক্রিস্টাল কাট' },
-              { id: 'soft', labelBn: 'ন্যাচারাল', labelEn: 'Natural Cut', descBn: 'স্বাভাবিক স্টুডিও লুক' },
-              { id: 'silky', labelBn: 'সিল্কি হেয়ার', labelEn: 'Fine Strands', descBn: 'সূক্ষ্ম চুলের আঁশ' },
+              {
+                id: 'removebg_smooth',
+                labelBn: 'remove.bg স্মুথ',
+                labelEn: 'Remove.bg Smooth',
+                descBn: 'চুল ও কানের মসৃণ কাট (সেরা)',
+                badgeBn: 'ডিফল্ট',
+              },
+              {
+                id: 'silky',
+                labelBn: 'সিল্কি হেয়ার',
+                labelEn: 'Silky Strands',
+                descBn: 'উড়ন্ত ও সূক্ষ্ম চুলের আঁশ',
+                badgeBn: 'ডেলিকেট',
+              },
+              {
+                id: 'crisp',
+                labelBn: 'ক্রিস্প কাট',
+                labelEn: 'Studio Crisp',
+                descBn: 'পাসপোর্ট ও ফরমাল ছবি',
+                badgeBn: 'শার্প',
+              },
+              {
+                id: 'soft',
+                labelBn: 'ন্যাচারাল সফট',
+                labelEn: 'Natural Soft',
+                descBn: 'স্বাভাবিক ব্যালেন্সড লুক',
+                badgeBn: 'নরম',
+              },
             ].map((mode) => {
-              const isSelected = (adjustments.hairFinishingLevel || 'crisp') === mode.id;
+              const isSelected = (adjustments.hairFinishingLevel || 'removebg_smooth') === mode.id;
               return (
                 <button
                   key={mode.id}
@@ -280,23 +305,27 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
                   onClick={() => {
                     setAdjustments((prev) => ({
                       ...prev,
-                      hairFinishingLevel: mode.id as 'silky' | 'soft' | 'crisp',
+                      hairFinishingLevel: mode.id as 'removebg_smooth' | 'silky' | 'soft' | 'crisp',
                     }));
                     if (onRefineEdges) {
-                      onRefineEdges(mode.id as 'silky' | 'soft' | 'crisp');
+                      onRefineEdges(mode.id as 'removebg_smooth' | 'silky' | 'soft' | 'crisp');
                     }
                   }}
-                  className={`p-2 rounded-lg text-left transition-all border cursor-pointer ${
+                  className={`p-2.5 rounded-lg text-left transition-all border cursor-pointer ${
                     isSelected
-                      ? 'bg-blue-600/25 border-blue-500 text-blue-300 ring-1 ring-blue-500/30'
+                      ? 'bg-emerald-600/25 border-emerald-400 text-emerald-200 ring-1 ring-emerald-500/40 shadow-sm'
                       : 'bg-slate-800/70 border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600'
                   }`}
                 >
                   <div className="text-[11px] font-semibold flex items-center justify-between">
                     <span>{lang === 'bn' ? mode.labelBn : mode.labelEn}</span>
-                    {isSelected && <Check className="w-3 h-3 text-blue-400" />}
+                    {isSelected ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <span className="text-[9px] text-slate-500 font-normal">{mode.badgeBn}</span>
+                    )}
                   </div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">
+                  <div className="text-[9px] text-slate-400 mt-1 leading-tight">
                     {mode.descBn}
                   </div>
                 </button>
@@ -304,23 +333,23 @@ export const AdjustmentsPanel: React.FC<AdjustmentsPanelProps> = ({
             })}
           </div>
 
-          {/* Re-apply button if user wants to trigger it manually */}
+          {/* Re-apply button for immediate smooth finishing on active image */}
           {onRefineEdges && (
             <button
               type="button"
               disabled={isRefining}
-              onClick={() => onRefineEdges(adjustments.hairFinishingLevel || 'crisp')}
-              className="w-full flex items-center justify-center space-x-1.5 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium transition-colors cursor-pointer"
+              onClick={() => onRefineEdges(adjustments.hairFinishingLevel || 'removebg_smooth')}
+              className="w-full flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-50"
             >
-              <RefreshCw className={`w-3 h-3 text-emerald-400 ${isRefining ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefining ? 'animate-spin' : ''}`} />
               <span>
                 {isRefining
                   ? lang === 'bn'
-                    ? 'একদম ক্লিয়ার ফিনিশিং হচ্ছে...'
-                    : 'Refining...'
+                    ? 'remove.bg স্মুথ ফিনিশিং হচ্ছে...'
+                    : 'Refining smoothly...'
                   : lang === 'bn'
-                  ? 'বর্তমান ছবিতে একদম ক্লিয়ার ফিনিশিং দিন'
-                  : 'Re-apply Ultra-Clear Finishing'}
+                  ? '✨ remove.bg স্টাইলে স্মুথ ফিনিশিং দিন'
+                  : '✨ Apply Remove.bg Smooth Matting'}
               </span>
             </button>
           )}

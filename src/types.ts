@@ -39,7 +39,7 @@ export interface SubjectAdjustments {
   hasShadow: boolean;
   shadowBlur: number;
   shadowOpacity: number;
-  hairFinishingLevel?: 'silky' | 'soft' | 'crisp';
+  hairFinishingLevel?: 'removebg_smooth' | 'silky' | 'soft' | 'crisp';
   removalStrength?: 'ultra' | 'strong' | 'balanced';
   defringeEnabled?: boolean;
 }

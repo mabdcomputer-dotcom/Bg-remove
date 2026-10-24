@@ -118,7 +118,7 @@ export default function App() {
     hasShadow: false,
     shadowBlur: 24,
     shadowOpacity: 0.35,
-    hairFinishingLevel: 'crisp',
+    hairFinishingLevel: 'removebg_smooth',
     removalStrength: 'ultra',
     defringeEnabled: true,
   });
@@ -148,10 +148,12 @@ export default function App() {
   const processBatchItem = async (
     item: BatchImageItem,
     overrideEngine?: RemovalEngine,
-    overrideStrength?: 'ultra' | 'strong' | 'balanced'
+    overrideStrength?: 'ultra' | 'strong' | 'balanced',
+    overrideFinishing?: 'removebg_smooth' | 'silky' | 'soft' | 'crisp'
   ) => {
     const activeEngine = overrideEngine || removalEngine;
     const activeStrength = overrideStrength || adjustments.removalStrength || 'ultra';
+    const activeFinishing = overrideFinishing || adjustments.hairFinishingLevel || 'removebg_smooth';
 
     // Update item status
     setImages((prev) =>
@@ -230,7 +232,7 @@ export default function App() {
         removeSecondaryObjects,
         fillHoles,
         refineHairAndEar: true,
-        edgeFinishingLevel: adjustments.hairFinishingLevel || 'crisp',
+        edgeFinishingLevel: activeFinishing,
         removalStrength: activeStrength,
         originalImageSource: dataUrl,
         onProgress: (stage, pct) => {
@@ -585,12 +587,18 @@ export default function App() {
   // Edge finishing live re-apply state
   const [isRefiningEdges, setIsRefiningEdges] = useState(false);
 
-  const handleRefineEdges = async (level: 'silky' | 'soft' | 'crisp') => {
+  const handleRefineEdges = async (
+    level: 'removebg_smooth' | 'silky' | 'soft' | 'crisp' = 'removebg_smooth'
+  ) => {
     const activeItem = images.find((i) => i.id === activeImageId);
     if (!activeItem || !activeItem.cutoutBlob) return;
 
     try {
       setIsRefiningEdges(true);
+      setAdjustments((prev) => ({
+        ...prev,
+        hairFinishingLevel: level,
+      }));
       const refinedBlob = await refineCutoutEdges(activeItem.cutoutBlob, level);
       const newCutoutUrl = URL.createObjectURL(refinedBlob);
       const newImg = new Image();
@@ -924,6 +932,21 @@ export default function App() {
                         ? (lang === 'bn' ? 'এআই মোডে টেস্ট' : 'Try AI Mode')
                         : (lang === 'bn' ? 'ফাস্ট মোডে টেস্ট' : 'Try Fast Mode')}
                     </span>
+                  </button>
+
+                  {/* Remove.bg Smooth Matting Button */}
+                  <button
+                    onClick={() => handleRefineEdges('removebg_smooth')}
+                    disabled={isProcessing || isRefiningEdges}
+                    title={
+                      lang === 'bn'
+                        ? 'remove.bg-এর মতো মাথার চুল ও কানের চারপাশ মসৃণ কাটআউট করুন'
+                        : 'Smooth hair & body like remove.bg'
+                    }
+                    className="flex items-center space-x-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg border bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border-emerald-500/50 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${isRefiningEdges ? 'animate-spin' : ''}`} />
+                    <span>{lang === 'bn' ? '✨ remove.bg স্মুথ' : '✨ remove.bg Smooth'}</span>
                   </button>
 
                   {/* Ultra Strong AI Re-Clean Button */}
