@@ -128,48 +128,35 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           className="hidden"
         />
 
-        {isProcessing ? (
-          <div className="py-6 flex flex-col items-center justify-center">
-            <div className="relative w-16 h-16 mb-4">
-              <div className="absolute inset-0 rounded-full border-4 border-slate-700"></div>
-              <div className="absolute inset-0 rounded-full border-4 border-blue-500 border-t-transparent animate-spin"></div>
-              <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-blue-400">
-                {progressPercent}%
-              </div>
-            </div>
-            <p className="text-base font-semibold text-white mb-1">
-              {progressText || (lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভ হচ্ছে...' : 'Removing background...')}
-            </p>
-            {/* Progress bar */}
-            <div className="w-64 h-2 bg-slate-800 rounded-full mt-4 overflow-hidden border border-slate-700">
-              <div
-                className="h-full bg-gradient-to-r from-blue-500 via-sky-400 to-emerald-400 transition-all duration-300"
-                style={{ width: `${progressPercent}%` }}
-              ></div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center">
-            <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/25 text-blue-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-lg shadow-blue-500/10">
-              <UploadCloud className="w-8 h-8" />
-            </div>
-            <h3 className="text-lg font-bold text-white mb-1">
-              {lang === 'bn' ? 'এক বা একাধিক ছবি ড্রপ করুন বা ব্রাউজ করুন' : 'Drop one or multiple photos here'}
-            </h3>
-            <p className="text-xs sm:text-sm text-slate-400 mb-5">
-              {lang === 'bn'
-                ? 'JPG, PNG, WEBP • একসাথে একাধিক ছবি সিলেক্ট করতে পারেন'
-                : 'Supports JPG, PNG, WEBP • Select multiple photos at once'}
-            </p>
-            <button
-              type="button"
-              className="inline-flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-emerald-500 hover:from-blue-500 hover:to-emerald-400 text-white text-sm font-bold shadow-lg shadow-blue-600/30 transition-all cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>{lang === 'bn' ? 'ছবি নির্বাচন করুন (+ একাধিক সম্ভব)' : 'Select Photos (+ Multiple)'}</span>
-            </button>
+        {isProcessing && (
+          <div className="absolute top-0 left-0 right-0 h-1 bg-slate-800 rounded-t-2xl overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-blue-500 via-sky-400 to-emerald-400 transition-all duration-300"
+              style={{ width: `${Math.max(15, progressPercent)}%` }}
+            ></div>
           </div>
         )}
+
+        <div className="flex flex-col items-center justify-center">
+          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/25 text-blue-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-lg shadow-blue-500/10">
+            <UploadCloud className="w-8 h-8" />
+          </div>
+          <h3 className="text-lg font-bold text-white mb-1">
+            {lang === 'bn' ? 'এক বা একাধিক ছবি ড্রপ করুন বা ব্রাউজ করুন' : 'Drop one or multiple photos here'}
+          </h3>
+          <p className="text-xs sm:text-sm text-slate-400 mb-5">
+            {lang === 'bn'
+              ? 'JPG, PNG, WEBP • একসাথে একাধিক ছবি সিলেক্ট করতে পারেন'
+              : 'Supports JPG, PNG, WEBP • Select multiple photos at once'}
+          </p>
+          <button
+            type="button"
+            className="inline-flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-emerald-500 hover:from-blue-500 hover:to-emerald-400 text-white text-sm font-bold shadow-lg shadow-blue-600/30 transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{lang === 'bn' ? 'ছবি নির্বাচন করুন (+ একাধিক সম্ভব)' : 'Select Photos (+ Multiple)'}</span>
+          </button>
+        </div>
       </div>
     </div>
   );

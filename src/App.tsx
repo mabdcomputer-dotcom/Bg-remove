@@ -315,19 +315,23 @@ export default function App() {
     const validFiles = files.filter((f) => f.type.startsWith('image/'));
     if (validFiles.length === 0) return;
 
-    const newItems: BatchImageItem[] = validFiles.map((file, idx) => ({
-      id: `${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
-      file,
-      name: file.name,
-      originalDataUrl: '',
-      cutoutDataUrl: null,
-      cutoutBlob: null,
-      cutoutImg: null,
-      isProcessing: true,
-      progress: 10,
-      statusText: lang === 'bn' ? 'অপেক্ষা করছে...' : 'Queued...',
-      dimensions: { width: 800, height: 1000 },
-    }));
+    // Create object URLs immediately so original preview is available instantly with 0ms delay
+    const newItems: BatchImageItem[] = validFiles.map((file, idx) => {
+      const objUrl = URL.createObjectURL(file);
+      return {
+        id: `${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+        file,
+        name: file.name,
+        originalDataUrl: objUrl,
+        cutoutDataUrl: null,
+        cutoutBlob: null,
+        cutoutImg: null,
+        isProcessing: true,
+        progress: 10,
+        statusText: lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভ হচ্ছে...' : 'Removing background...',
+        dimensions: { width: 800, height: 1000 },
+      };
+    });
 
     setImages((prev) => [...prev, ...newItems]);
 
@@ -336,11 +340,25 @@ export default function App() {
     setActiveImageId(targetItem.id);
     activeImageIdRef.current = targetItem.id;
     setOriginalFile(targetItem.file);
+    setOriginalDataUrl(targetItem.originalDataUrl);
+
+    // Preload image element immediately for instant canvas rendering without wait popup
+    const oImg = new Image();
+    oImg.onload = () => {
+      originalImgRef.current = oImg;
+      setOriginalDimensions({
+        width: oImg.naturalWidth || 800,
+        height: oImg.naturalHeight || 1000,
+      });
+      setRenderTrigger((v) => v + 1);
+    };
+    oImg.src = targetItem.originalDataUrl;
+
     setCutoutDataUrl(null);
     setCutoutImgState(null);
     cutoutImgRef.current = null;
     setIsProcessing(true);
-    setProgressPercent(10);
+    setProgressPercent(15);
     setProgressText(lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভ হচ্ছে...' : 'Removing background...');
 
     // Process all files sequentially in queue, updating active view as each new image processes
@@ -574,14 +592,12 @@ export default function App() {
   const renderComposite = useCallback(() => {
     const canvas = displayCanvasRef.current;
     const cutoutImg = cutoutImgRef.current || cutoutImgState;
-    if (!canvas || !cutoutImg) return;
-
-    // Ensure image has loaded dimensions
-    if ((cutoutImg.naturalWidth || cutoutImg.width) === 0) return;
+    const originalImg = originalImgRef.current;
+    if (!canvas || (!cutoutImg && !originalImg)) return;
 
     renderCompositeToCanvas({
       canvas,
-      cutoutImg,
+      cutoutImg: cutoutImg || null,
       originalImg: originalImgRef.current,
       bgType,
       solidColor,
@@ -610,7 +626,7 @@ export default function App() {
 
   // High-performance canvas render whenever any setting or image changes (Instant & smooth)
   useEffect(() => {
-    if (cutoutDataUrl && (cutoutImgRef.current || cutoutImgState)) {
+    if ((cutoutImgRef.current || cutoutImgState) || originalImgRef.current) {
       renderComposite();
       const frameId = requestAnimationFrame(() => {
         renderComposite();
@@ -619,7 +635,7 @@ export default function App() {
         cancelAnimationFrame(frameId);
       };
     }
-  }, [cutoutDataUrl, cutoutImgState, renderTrigger, renderComposite]);
+  }, [cutoutDataUrl, cutoutImgState, originalDataUrl, renderTrigger, renderComposite]);
 
   // Edge finishing live re-apply state
   const [isRefiningEdges, setIsRefiningEdges] = useState(false);
@@ -1072,32 +1088,26 @@ export default function App() {
                   }}
                 ></div>
 
-                {/* Main Content Display */}
-                {isProcessing && !cutoutDataUrl ? (
-                  <div className="py-12 flex flex-col items-center justify-center text-center max-w-md mx-auto z-10">
-                    <div className="relative w-16 h-16 mb-4">
-                      <div className="absolute inset-0 rounded-full border-4 border-slate-700"></div>
-                      <div className="absolute inset-0 rounded-full border-4 border-blue-500 border-t-transparent animate-spin"></div>
-                      <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-blue-400">
-                        {progressPercent}%
-                      </div>
-                    </div>
-                    <h4 className="text-base font-bold text-white mb-1">
-                      {progressText || (lang === 'bn' ? 'ব্যাকগ্রাউন্ড রিমুভ হচ্ছে...' : 'Removing background...')}
-                    </h4>
-                    <p className="text-xs text-slate-400">
-                      {lang === 'bn'
-                        ? 'শুধু মূল অবজেক্টকে সলিড রেখে নিখুঁতভাবে কাটআউট তৈরি হচ্ছে...'
-                        : 'Extracting clean solid main subject and filling internal holes...'}
-                    </p>
-                    <div className="w-56 h-2 bg-slate-800 rounded-full mt-4 overflow-hidden border border-slate-700">
+                {/* Subtle, non-blocking slim top progress line when background removal is calculating (No wait popup!) */}
+                {isProcessing && (
+                  <div className="absolute top-0 left-0 right-0 z-30 pointer-events-none">
+                    <div className="h-1.5 w-full bg-slate-800/80 overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-blue-500 to-emerald-400 transition-all duration-300"
-                        style={{ width: `${progressPercent}%` }}
-                      ></div>
+                        className="h-full bg-gradient-to-r from-blue-500 via-sky-400 to-emerald-400 transition-all duration-300"
+                        style={{ width: `${Math.max(15, progressPercent)}%` }}
+                      />
+                    </div>
+                    <div className="px-3 py-1 flex items-center justify-end">
+                      <span className="text-[10px] font-semibold text-sky-400/90 bg-slate-900/80 px-2 py-0.5 rounded-full border border-sky-500/20 shadow-xs flex items-center space-x-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse inline-block"></span>
+                        <span>{progressPercent}% {progressText || (lang === 'bn' ? 'প্রসেসিং...' : 'Processing...')}</span>
+                      </span>
                     </div>
                   </div>
-                ) : showComparison && originalDataUrl ? (
+                )}
+
+                {/* Main Content Display - NO BLOCKING WAIT POPUP */}
+                {showComparison && originalDataUrl ? (
                   <div className="w-full h-full max-h-[600px] flex items-center justify-center">
                     <ComparisonSlider
                       originalUrl={originalDataUrl}
@@ -1125,7 +1135,7 @@ export default function App() {
                       <canvas
                         ref={(el) => {
                           displayCanvasRef.current = el;
-                          if (el && (cutoutImgRef.current || cutoutImgState)) {
+                          if (el && ((cutoutImgRef.current || cutoutImgState) || originalImgRef.current)) {
                             renderComposite();
                           }
                         }}

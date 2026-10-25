@@ -7,7 +7,7 @@ import {
 
 export interface RenderCanvasOptions {
   canvas: HTMLCanvasElement;
-  cutoutImg: HTMLImageElement;
+  cutoutImg?: HTMLImageElement | null;
   originalImg?: HTMLImageElement | null;
   bgType: BackgroundType;
   solidColor: string;
@@ -83,8 +83,11 @@ export function renderCompositeToCanvas(options: RenderCanvasOptions): void {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return;
 
-  const originalWidth = cutoutImg.naturalWidth || cutoutImg.width || 800;
-  const originalHeight = cutoutImg.naturalHeight || cutoutImg.height || 1000;
+  const subjectImg = cutoutImg || originalImg;
+  if (!subjectImg) return;
+
+  const originalWidth = subjectImg.naturalWidth || subjectImg.width || 800;
+  const originalHeight = subjectImg.naturalHeight || subjectImg.height || 1000;
 
   if (originalWidth === 0 || originalHeight === 0) return;
 
@@ -102,6 +105,28 @@ export function renderCompositeToCanvas(options: RenderCanvasOptions): void {
   ctx.imageSmoothingQuality = 'high';
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // If cutout is not yet available (processing smoothly in background), render the original photo directly
+  if (!cutoutImg && originalImg) {
+    const z = Math.max(1, zoom);
+    const zoomedCropW = crop.width / z;
+    const zoomedCropH = crop.height / z;
+    const srcX = Math.max(0, Math.min(originalWidth - zoomedCropW, crop.x - panX / z));
+    const srcY = Math.max(0, Math.min(originalHeight - zoomedCropH, crop.y - panY / z));
+
+    ctx.drawImage(
+      originalImg,
+      srcX,
+      srcY,
+      zoomedCropW,
+      zoomedCropH,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+    return;
+  }
 
   // 1. Render Background Layer
   if (bgType === 'solid') {
