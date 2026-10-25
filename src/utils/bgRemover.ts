@@ -325,15 +325,19 @@ export async function applyHairAndEarFinishing(
       const curIdx = rowOffset + x;
       const curDist = distToBg[curIdx];
 
-      // Skip non-boundary pixels instantly (99% of image pixels are skipped here!)
-      if (curDist <= 0) {
+      // 1) Background pixels: enforce zero alpha
+      if (curDist === 0) {
         refinedAlpha[curIdx] = 0;
         continue;
       }
-      if (curDist >= 4) {
+
+      // 2) Subject interior pixels (curDist === -1 or curDist >= 4):
+      // Deep inside subject: preserve full original alpha untouched!
+      if (curDist === -1 || curDist >= 4) {
         continue;
       }
 
+      // 3) Only boundary transition band (curDist === 1, 2, or 3) is processed below
       boundaryProcessedCount++;
       if (boundaryProcessedCount % 1200 === 0 && performance.now() - lastYield > 10) {
         await yieldToMain();
@@ -361,7 +365,8 @@ export async function applyHairAndEarFinishing(
         const nDist = distToBg[nIdx];
         const w = ko.w;
 
-        if (nDist >= 2 && alphaSnapshot[nIdx] >= 190) {
+        // Interior (-1) or deep boundary (>= 2) with confident alpha is true solid foreground
+        if ((nDist === -1 || nDist >= 2) && alphaSnapshot[nIdx] >= 170) {
           const p4 = nIdx * 4;
           solidR += sourceRGB[p4] * w;
           solidG += sourceRGB[p4 + 1] * w;
@@ -377,8 +382,11 @@ export async function applyHairAndEarFinishing(
       }
 
       if (solidW === 0) {
-        refinedAlpha[curIdx] = 0;
-        continue;
+        // Fallback to own color if no nearby solid core; do not erase
+        solidR = pR;
+        solidG = pG;
+        solidB = pB;
+        solidW = 1;
       }
 
       const fR = solidR / solidW;
@@ -475,8 +483,8 @@ export async function applyHairAndEarFinishing(
       const idx = rowOffset + x;
       const curA = refinedAlpha[idx];
       const curDist = distToBg[idx];
-
-      if (curA === 0 || curDist >= 3) continue;
+      // Only anti-alias outer boundary (dist 1 and 2). Skip bg (0) and interior (-1, >= 3)
+      if (curA === 0 || curDist <= 0 || curDist >= 3) continue;
 
       let sumNeighborA = 0;
       let totalWeight = 0;
