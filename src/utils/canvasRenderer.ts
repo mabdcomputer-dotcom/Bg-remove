@@ -204,18 +204,38 @@ export function renderCompositeToCanvas(options: RenderCanvasOptions): void {
 
 /**
  * Downloads canvas as an image file at full resolution.
+ * When saving as JPEG, transparent pixels are composited onto a clean white background
+ * so that transparent cutouts never turn black.
  */
 export function downloadCanvasImage(
   canvas: HTMLCanvasElement,
   filename: string,
-  format: 'png' | 'jpeg' | 'webp' = 'png',
-  quality = 0.98
+  format: 'png' | 'jpeg' | 'webp' = 'jpeg',
+  quality = 0.98,
+  fallbackBgColor = '#ffffff'
 ): void {
   const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
   const cleanBaseName = filename.replace(/\.[^/.]+$/, '');
   const downloadName = `${cleanBaseName}-studio-bg.${format === 'jpeg' ? 'jpg' : format}`;
 
-  canvas.toBlob(
+  let targetCanvas: HTMLCanvasElement = canvas;
+
+  if (format === 'jpeg') {
+    // HTML5 Canvas directly to JPEG turns transparent pixels pitch black.
+    // We compose onto a clean white background to guarantee a pristine, professional result.
+    const jpgCanvas = document.createElement('canvas');
+    jpgCanvas.width = canvas.width;
+    jpgCanvas.height = canvas.height;
+    const ctx = jpgCanvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = fallbackBgColor;
+      ctx.fillRect(0, 0, jpgCanvas.width, jpgCanvas.height);
+      ctx.drawImage(canvas, 0, 0);
+      targetCanvas = jpgCanvas;
+    }
+  }
+
+  targetCanvas.toBlob(
     (blob) => {
       if (!blob) return;
       const url = URL.createObjectURL(blob);

@@ -129,7 +129,7 @@ export default function App() {
   // Comparison & View modes
   const [showComparison, setShowComparison] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'png' | 'jpeg' | 'webp'>('png');
+  const [exportFormat, setExportFormat] = useState<'png' | 'jpeg' | 'webp'>('jpeg');
 
   // Brush Touch-up Mode
   const [isBrushActive, setIsBrushActive] = useState(false);
@@ -472,24 +472,59 @@ export default function App() {
     setIsBrushActive(false);
   };
 
-  // Batch ZIP Download
+  // Batch ZIP Download (Defaults to JPG format)
   const handleDownloadAllZip = async () => {
-    const readyItems = images.filter((img) => !!img.cutoutBlob);
+    const readyItems = images.filter((img) => !!img.cutoutBlob || !!img.cutoutImg);
     if (readyItems.length === 0) return;
     setIsDownloadingZip(true);
     try {
       const zip = new JSZip();
 
-      readyItems.forEach((item) => {
+      for (const item of readyItems) {
         const cleanName = item.name.replace(/\.[^/.]+$/, '');
-        zip.file(`${cleanName}-solid-object.png`, item.cutoutBlob!);
-      });
+        if (exportFormat === 'jpeg') {
+          // Render to JPG with white background
+          const jpgBlob = await new Promise<Blob | null>((resolve) => {
+            const img = item.cutoutImg || new Image();
+            const doConvert = (sourceImg: HTMLImageElement) => {
+              const c = document.createElement('canvas');
+              c.width = sourceImg.naturalWidth || sourceImg.width || 800;
+              c.height = sourceImg.naturalHeight || sourceImg.height || 800;
+              const ctx = c.getContext('2d');
+              if (ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, c.width, c.height);
+                ctx.drawImage(sourceImg, 0, 0);
+              }
+              c.toBlob(resolve, 'image/jpeg', 0.98);
+            };
+
+            if (item.cutoutImg && (item.cutoutImg.naturalWidth || item.cutoutImg.width)) {
+              doConvert(item.cutoutImg);
+            } else if (item.cutoutDataUrl) {
+              img.onload = () => doConvert(img);
+              img.src = item.cutoutDataUrl;
+            } else {
+              resolve(null);
+            }
+          });
+
+          if (jpgBlob) {
+            zip.file(`${cleanName}-cutout.jpg`, jpgBlob);
+          } else if (item.cutoutBlob) {
+            zip.file(`${cleanName}-cutout.png`, item.cutoutBlob);
+          }
+        } else {
+          const ext = exportFormat === 'webp' ? 'webp' : 'png';
+          zip.file(`${cleanName}-solid-object.${ext}`, item.cutoutBlob!);
+        }
+      }
 
       const content = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `photos-bg-removed-batch-${Date.now()}.zip`;
+      a.download = `photos-cutout-${exportFormat === 'jpeg' ? 'jpg' : exportFormat}-batch-${Date.now()}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -683,19 +718,29 @@ export default function App() {
     }
   };
 
-  // Dedicated Transparent PNG Download (Pure Solid Object)
+  // Dedicated Cutout Object Download (JPG with clean white BG or Transparent PNG)
   const handleDownloadTransparent = () => {
     const img = cutoutImgRef.current || cutoutImgState;
     if (!img) return;
     const baseName = (originalFile?.name || 'photo').replace(/\.[^/.]+$/, '');
-    const downloadName = `${baseName}-solid-object-transparent.png`;
+    const isJpg = exportFormat === 'jpeg';
+    const ext = isJpg ? 'jpg' : exportFormat === 'webp' ? 'webp' : 'png';
+    const mime = isJpg ? 'image/jpeg' : exportFormat === 'webp' ? 'image/webp' : 'image/png';
+    const downloadName = `${baseName}-cutout.${ext}`;
 
     const canvas = document.createElement('canvas');
     canvas.width = img.naturalWidth || img.width;
     canvas.height = img.naturalHeight || img.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (isJpg) {
+      // JPG does not support alpha - render on pure crisp white background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
     ctx.drawImage(img, 0, 0);
 
     canvas.toBlob((blob) => {
@@ -716,7 +761,7 @@ export default function App() {
           colors: ['#38bdf8', '#34d399', '#ffffff'],
         });
       } catch (e) {}
-    }, 'image/png');
+    }, mime, 0.98);
   };
 
   // 5. Copy image to clipboard
@@ -1404,13 +1449,13 @@ export default function App() {
                   <span>
                     {lang === 'bn'
                       ? (bgType === 'transparent'
-                          ? `স্বচ্ছ ব্যাকগ্রাউন্ড ডাউনলোড (${exportFormat.toUpperCase()})`
-                          : `কালার ব্যাকগ্রাউন্ড সহ ডাউনলোড (${exportFormat.toUpperCase()})`)
-                      : `Download with Background (${exportFormat.toUpperCase()})`}
+                          ? `ছবি ডাউনলোড (${exportFormat === 'jpeg' ? 'JPG' : exportFormat.toUpperCase()})`
+                          : `ব্যাকগ্রাউন্ড সহ ছবি ডাউনলোড (${exportFormat === 'jpeg' ? 'JPG' : exportFormat.toUpperCase()})`)
+                      : `Download Image (${exportFormat === 'jpeg' ? 'JPG' : exportFormat.toUpperCase()})`}
                   </span>
                 </button>
 
-                {/* Secondary Button: Pure Solid Object Transparent PNG */}
+                {/* Secondary Button: Cutout Object Download */}
                 <button
                   type="button"
                   onClick={handleDownloadTransparent}
@@ -1419,8 +1464,12 @@ export default function App() {
                   <Layers className="w-4 h-4 text-sky-400" />
                   <span>
                     {lang === 'bn'
-                      ? '📥 শুধু মেইন অবজেক্ট স্বচ্ছ পিএনজি ডাউনলোড (PNG)'
-                      : '📥 Download Solid Subject Only (Transparent PNG)'}
+                      ? (exportFormat === 'jpeg'
+                          ? '📥 শুধু মেইন অবজেক্ট JPG ডাউনলোড (হোয়াইট ব্যাকগ্রাউন্ড)'
+                          : '📥 শুধু মেইন অবজেক্ট ডাউনলোড (স্বচ্ছ PNG)')
+                      : (exportFormat === 'jpeg'
+                          ? '📥 Download Subject Only (JPG White BG)'
+                          : '📥 Download Subject Only (Transparent PNG)')}
                   </span>
                 </button>
 
